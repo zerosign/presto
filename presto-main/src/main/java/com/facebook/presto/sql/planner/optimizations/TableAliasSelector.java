@@ -139,13 +139,13 @@ public class TableAliasSelector
                 newAssignmentsBuilder.put(assignmentEntry.getKey(), aliasedColumnHandle);
             }
 
-            return new TableScanNode(node.getId(), aliasTableHandle.get(), node.getOutputSymbols(), newAssignmentsBuilder.build(), node.getPartitionPredicate(), node.getUpstreamPredicateHint());
+            return new TableScanNode(node.getId(), aliasTableHandle.get(), node.getOutputSymbols(), newAssignmentsBuilder.build(), node.getGeneratedPartitions());
         }
 
         private boolean allNodesPresent(TableHandle tableHandle)
         {
             Set<String> nodesActive = ImmutableSet.copyOf(Collections2.transform(nodeManager.getAllNodes().getActiveNodes(), Node.getIdentifierFunction()));
-            Set<String> nodesRequired = ImmutableSet.copyOf(shardManager.getCommittedShardNodesByTableId(tableHandle).values());
+            Set<String> nodesRequired = shardManager.getTableNodes(tableHandle);
 
             return nodesActive.containsAll(nodesRequired);
         }
