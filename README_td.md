@@ -64,13 +64,13 @@ $ git apply changes.patch
 $ git commit -a
 ```
 
-5) push to github
+4) push to github
 
 ```sh
 $ git push -u origin "xyz-new-function"
 ```
 
-6) send pull-request on github
+5) send pull-request on github
 
-https://github.com/treasure-data/td-hadoop/compare/xyz-new-function?expand=1
+https://github.com/treasure-data/presto/compare/xyz-new-function?expand=1
 
