@@ -393,13 +393,13 @@ numericFactor
 
 exprPrimary
     : NULL
+    | (dateValue) => dateValue
+    | (intervalValue) => intervalValue
     | qnameOrFunction
     | specialFunction
     | number
     | bool
     | STRING
-    | dateValue
-    | intervalValue
     | caseExpression
     | ('(' expr ')') => ('(' expr ')' -> expr)
     | subquery
@@ -527,7 +527,7 @@ frameBound
     ;
 
 explainStmt
-    : EXPLAIN explainOptions? query -> ^(EXPLAIN explainOptions? query)
+    : EXPLAIN explainOptions? statement -> ^(EXPLAIN explainOptions? statement)
     ;
 
 explainOptions
@@ -554,7 +554,11 @@ showTablesLike
     ;
 
 showSchemasStmt
-    : SHOW SCHEMAS -> SHOW_SCHEMAS
+    : SHOW SCHEMAS from=showSchemasFrom? -> ^(SHOW_SCHEMAS $from?)
+    ;
+
+showSchemasFrom
+    : (FROM | IN) ident -> ^(FROM ident)
     ;
 
 showCatalogsStmt
@@ -689,6 +693,7 @@ nonReserved
     : SHOW | TABLES | COLUMNS | PARTITIONS | FUNCTIONS | SCHEMAS | CATALOGS
     | OVER | PARTITION | RANGE | ROWS | PRECEDING | FOLLOWING | CURRENT | ROW
     | REFRESH | MATERIALIZED | VIEW | ALIAS
+    | DATE | TIME | TIMESTAMP | INTERVAL
     | YEAR | MONTH | DAY | HOUR | MINUTE | SECOND
     | EXPLAIN | FORMAT | TYPE | TEXT | GRAPHVIZ | LOGICAL | DISTRIBUTED
     | TABLESAMPLE | SYSTEM | BERNOULLI
