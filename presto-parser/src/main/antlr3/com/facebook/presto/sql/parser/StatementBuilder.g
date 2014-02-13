@@ -64,6 +64,7 @@ statement returns [Statement value]
     | showColumns               { $value = $showColumns.value; }
     | showPartitions            { $value = $showPartitions.value; }
     | showFunctions             { $value = $showFunctions.value; }
+    | useCollection             { $value = $useCollection.value; }
     | createTable               { $value = $createTable.value; }
     | createMaterializedView    { $value = $createMaterializedView.value; }
     | refreshMaterializedView   { $value = $refreshMaterializedView.value; }
@@ -81,11 +82,13 @@ queryExpr returns [Query value]
       queryBody
       orderClause?
       limitClause?
+      approximateClause?
         { $value = new Query(
             Optional.fromNullable($withClause.value),
             $queryBody.value,
             Objects.firstNonNull($orderClause.value, ImmutableList.<SortItem>of()),
-            Optional.fromNullable($limitClause.value));
+            Optional.fromNullable($limitClause.value),
+            Optional.fromNullable($approximateClause.value));
         }
     ;
 
@@ -135,12 +138,18 @@ restrictedSelectStmt returns [Query value]
                 ImmutableList.<SortItem>of(),
                 Optional.<String>absent()),
             ImmutableList.<SortItem>of(),
-            Optional.<String>absent());
+            Optional.<String>absent(),
+            Optional.<Approximate>absent());
         }
     ;
 
 withClause returns [With value]
     : ^(WITH recursive withList) { $value = new With($recursive.value, $withList.value); }
+    ;
+
+approximateClause returns [Approximate value]
+    : ^(APPROXIMATE decimal) { $value = new Approximate($decimal.value); }
+    | ^(APPROXIMATE integer) { $value = new Approximate($integer.value); }
     ;
 
 recursive returns [boolean value]
@@ -471,6 +480,7 @@ explainOptions returns [List<ExplainOption> value = new ArrayList<>()]
 explainOption returns [ExplainOption value]
     : ^(EXPLAIN_FORMAT TEXT)      { $value = new ExplainFormat(ExplainFormat.Type.TEXT); }
     | ^(EXPLAIN_FORMAT GRAPHVIZ)  { $value = new ExplainFormat(ExplainFormat.Type.GRAPHVIZ); }
+    | ^(EXPLAIN_FORMAT JSON)      { $value = new ExplainFormat(ExplainFormat.Type.JSON); }
     | ^(EXPLAIN_TYPE LOGICAL)     { $value = new ExplainType(ExplainType.Type.LOGICAL); }
     | ^(EXPLAIN_TYPE DISTRIBUTED) { $value = new ExplainType(ExplainType.Type.DISTRIBUTED); }
     ;
@@ -515,6 +525,11 @@ showPartitions returns [Statement value]
 
 showFunctions returns [Statement value]
     : SHOW_FUNCTIONS { $value = new ShowFunctions(); }
+    ;
+
+useCollection returns [Statement value]
+    : ^(USE_CATALOG ident) { $value = new UseCollection($ident.value, UseCollection.CollectionType.CATALOG); }
+    | ^(USE_SCHEMA ident) { $value = new UseCollection($ident.value, UseCollection.CollectionType.SCHEMA); }
     ;
 
 createTable returns [Statement value]

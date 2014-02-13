@@ -13,7 +13,9 @@
  */
 package com.facebook.presto.sql.planner;
 
-import com.facebook.presto.client.Input;
+import com.facebook.presto.execution.Column;
+import com.facebook.presto.execution.Input;
+import com.facebook.presto.execution.SimpleDomain;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.TableMetadata;
 import com.facebook.presto.spi.ColumnHandle;
@@ -23,6 +25,7 @@ import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.PlanVisitor;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
+import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSetMultimap;
 
@@ -42,12 +45,12 @@ public class InputExtractor
 
     public List<Input> extract(PlanNode root)
     {
-        ImmutableSetMultimap.Builder<TableEntry, String> builder = ImmutableSetMultimap.builder();
+        ImmutableSetMultimap.Builder<TableEntry, Column> builder = ImmutableSetMultimap.builder();
 
         root.accept(new Visitor(builder), null);
 
         ImmutableList.Builder<Input> inputBuilder = ImmutableList.builder();
-        for (Map.Entry<TableEntry, Collection<String>> entry : builder.build().asMap().entrySet()) {
+        for (Map.Entry<TableEntry, Collection<Column>> entry : builder.build().asMap().entrySet()) {
             Input input = new Input(entry.getKey().getConnectorId(), entry.getKey().getSchema(), entry.getKey().getTable(), ImmutableList.copyOf(entry.getValue()));
             inputBuilder.add(input);
         }
@@ -58,9 +61,9 @@ public class InputExtractor
     private class Visitor
             extends PlanVisitor<Void, Void>
     {
-        private final ImmutableSetMultimap.Builder<TableEntry, String> builder;
+        private final ImmutableSetMultimap.Builder<TableEntry, Column> builder;
 
-        public Visitor(ImmutableSetMultimap.Builder<TableEntry, String> builder)
+        public Visitor(ImmutableSetMultimap.Builder<TableEntry, Column> builder)
         {
             this.builder = builder;
         }
@@ -73,10 +76,13 @@ public class InputExtractor
             SchemaTableName schemaTable = table.getTable();
 
             TableEntry entry = new TableEntry(table.getConnectorId(), schemaTable.getSchemaName(), schemaTable.getTableName());
+            Optional<ColumnHandle> sampleWeightColumn = metadata.getSampleWeightColumnHandle(tableHandle);
 
             for (ColumnHandle columnHandle : node.getAssignments().values()) {
-                ColumnMetadata columnMetadata = metadata.getColumnMetadata(tableHandle, columnHandle);
-                builder.put(entry, columnMetadata.getName());
+                if (!columnHandle.equals(sampleWeightColumn.orNull())) {
+                    ColumnMetadata columnMetadata = metadata.getColumnMetadata(tableHandle, columnHandle);
+                    builder.put(entry, new Column(columnMetadata.getName(), columnMetadata.getType().toString(), Optional.<SimpleDomain>absent()));
+                }
             }
 
             return null;

@@ -67,6 +67,8 @@ tokens {
     SHOW_COLUMNS;
     SHOW_PARTITIONS;
     SHOW_FUNCTIONS;
+    USE_CATALOG;
+    USE_SCHEMA;
     CREATE_TABLE;
     CREATE_MATERIALIZED_VIEW;
     REFRESH_MATERIALIZED_VIEW;
@@ -154,6 +156,7 @@ statement
     | showColumnsStmt
     | showPartitionsStmt
     | showFunctionsStmt
+    | useCollectionStmt
     | createTableStmt
     | dropTableStmt
     | createMaterializedViewStmt
@@ -171,6 +174,7 @@ queryExpr
       ( (orderOrLimitQuerySpec) => orderOrLimitQuerySpec
       | queryExprBody orderClause? limitClause?
       )
+      approximateClause?
     ;
 
 orderOrLimitQuerySpec
@@ -210,6 +214,10 @@ simpleQuery
 restrictedSelectStmt
     : selectClause
       fromClause
+    ;
+
+approximateClause
+    : APPROXIMATE AT number CONFIDENCE -> ^(APPROXIMATE number)
     ;
 
 withClause
@@ -526,6 +534,11 @@ frameBound
       )
     ;
 
+useCollectionStmt
+    : USE CATALOG ident -> ^(USE_CATALOG ident)
+    | USE SCHEMA ident -> ^(USE_SCHEMA ident)
+    ;
+
 explainStmt
     : EXPLAIN explainOptions? statement -> ^(EXPLAIN explainOptions? statement)
     ;
@@ -537,6 +550,7 @@ explainOptions
 explainOption
     : FORMAT TEXT      -> ^(EXPLAIN_FORMAT TEXT)
     | FORMAT GRAPHVIZ  -> ^(EXPLAIN_FORMAT GRAPHVIZ)
+    | FORMAT JSON      -> ^(EXPLAIN_FORMAT JSON)
     | TYPE LOGICAL     -> ^(EXPLAIN_TYPE LOGICAL)
     | TYPE DISTRIBUTED -> ^(EXPLAIN_TYPE DISTRIBUTED)
     ;
@@ -696,7 +710,8 @@ nonReserved
     | DATE | TIME | TIMESTAMP | INTERVAL
     | YEAR | MONTH | DAY | HOUR | MINUTE | SECOND
     | EXPLAIN | FORMAT | TYPE | TEXT | GRAPHVIZ | LOGICAL | DISTRIBUTED
-    | TABLESAMPLE | SYSTEM | BERNOULLI
+    | TABLESAMPLE | SYSTEM | BERNOULLI | USE | SCHEMA | CATALOG | JSON
+    | APPROXIMATE | AT | CONFIDENCE
     ;
 
 SELECT: 'SELECT';
@@ -710,6 +725,9 @@ BY: 'BY';
 ORDER: 'ORDER';
 HAVING: 'HAVING';
 LIMIT: 'LIMIT';
+APPROXIMATE: 'APPROXIMATE';
+AT: 'AT';
+CONFIDENCE: 'CONFIDENCE';
 OR: 'OR';
 AND: 'AND';
 IN: 'IN';
@@ -794,14 +812,18 @@ FORMAT: 'FORMAT';
 TYPE: 'TYPE';
 TEXT: 'TEXT';
 GRAPHVIZ: 'GRAPHVIZ';
+JSON: 'JSON';
 LOGICAL: 'LOGICAL';
 DISTRIBUTED: 'DISTRIBUTED';
 CAST: 'CAST';
 SHOW: 'SHOW';
 TABLES: 'TABLES';
+SCHEMA: 'SCHEMA';
 SCHEMAS: 'SCHEMAS';
+CATALOG: 'CATALOG';
 CATALOGS: 'CATALOGS';
 COLUMNS: 'COLUMNS';
+USE: 'USE';
 PARTITIONS: 'PARTITIONS';
 FUNCTIONS: 'FUNCTIONS';
 MATERIALIZED: 'MATERIALIZED';

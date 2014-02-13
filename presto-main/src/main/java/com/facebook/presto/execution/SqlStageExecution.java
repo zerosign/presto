@@ -19,8 +19,8 @@ import com.facebook.presto.PagePartitionFunction;
 import com.facebook.presto.UnpartitionedPagePartitionFunction;
 import com.facebook.presto.execution.NodeScheduler.NodeSelector;
 import com.facebook.presto.execution.StateMachine.StateChangeListener;
-import com.facebook.presto.metadata.Node;
 import com.facebook.presto.operator.TaskStats;
+import com.facebook.presto.spi.Node;
 import com.facebook.presto.spi.Split;
 import com.facebook.presto.spi.SplitSource;
 import com.facebook.presto.split.RemoteSplit;
@@ -42,12 +42,11 @@ import com.google.common.base.Function;
 import com.google.common.base.Objects;
 import com.google.common.base.Optional;
 import com.google.common.base.Throwables;
-import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableMultimap;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Multimap;
-import com.google.common.collect.Ordering;
 import com.google.common.collect.Sets;
 import io.airlift.log.Logger;
 import io.airlift.stats.Distribution;
@@ -116,7 +115,7 @@ public class SqlStageExecution
     private final RemoteTaskFactory remoteTaskFactory;
     private final Session session; // only used for remote task factory
     private final int splitBatchSize;
-    private final int maxPendingSplitsPerNode;
+
     private final int initialHashPartitions;
 
     private final StateMachine<StageState> stageState;
@@ -206,7 +205,6 @@ public class SqlStageExecution
             this.remoteTaskFactory = remoteTaskFactory;
             this.session = session;
             this.splitBatchSize = splitBatchSize;
-            this.maxPendingSplitsPerNode = maxPendingSplitsPerNode;
             this.initialHashPartitions = initialHashPartitions;
             this.executor = executor;
 
@@ -242,15 +240,7 @@ public class SqlStageExecution
             this.subStages = subStages.build();
 
             String dataSourceName = dataSource.isPresent() ? dataSource.get().getDataSourceName() : null;
-            this.nodeSelector = nodeScheduler.createNodeSelector(dataSourceName, Ordering.natural().onResultOf(new Function<Node, Integer>()
-            {
-                @Override
-                public Integer apply(Node input)
-                {
-                    RemoteTask task = tasks.get(input);
-                    return task == null ? 0 : task.getQueuedSplits();
-                }
-            }));
+            this.nodeSelector = nodeScheduler.createNodeSelector(dataSourceName, tasks, maxPendingSplitsPerNode);
             stageState = new StateMachine<>("stage " + stageId, this.executor, StageState.PLANNED);
             stageState.addStateChangeListener(new StateChangeListener<StageState>()
             {
@@ -290,6 +280,12 @@ public class SqlStageExecution
     public StageInfo getStageInfo()
     {
         try (SetThreadName setThreadName = new SetThreadName("Stage-%s", stageId)) {
+            // stage state must be captured first in order to provide a
+            // consistent view of the stage For example, building this
+            // information, the stage could finish, and the task states would
+            // never be visible.
+            StageState state = stageState.get();
+
             List<TaskInfo> taskInfos = IterableTransformer.on(tasks.values()).transform(taskInfoGetter()).list();
             List<StageInfo> subStageInfos = IterableTransformer.on(subStages.values()).transform(stageInfoGetter()).list();
 
@@ -378,7 +374,7 @@ public class SqlStageExecution
                     outputPositions);
 
             return new StageInfo(stageId,
-                    stageState.get(),
+                    state,
                     location,
                     fragment,
                     tupleInfos,
@@ -501,6 +497,12 @@ public class SqlStageExecution
             }
             return locations.build();
         }
+    }
+
+    @VisibleForTesting
+    public Map<Node, RemoteTask> getTasks()
+    {
+        return ImmutableMap.copyOf(tasks);
     }
 
     public Future<?> start()
@@ -632,31 +634,16 @@ public class SqlStageExecution
                 break;
             }
 
-            Multimap<Node, Split> nodeSplits = ArrayListMultimap.create();
-            for (Split split : splitSource.getNextBatch(splitBatchSize)) {
-                Node node = chooseNode(nodeSelector, split, nextTaskId);
-                nodeSplits.put(node, split);
-            }
+            Set<Split> pendingSplits = ImmutableSet.copyOf(splitSource.getNextBatch(splitBatchSize));
+            while (!pendingSplits.isEmpty() && !getState().isDone()) {
+                Multimap<Node, Split> splitAssignment = nodeSelector.computeAssignments(pendingSplits);
+                pendingSplits = ImmutableSet.copyOf(Sets.difference(pendingSplits, ImmutableSet.copyOf(splitAssignment.values())));
 
-            for (Entry<Node, Collection<Split>> taskSplits : nodeSplits.asMap().entrySet()) {
-                long scheduleSplitStart = System.nanoTime();
-                Node node = taskSplits.getKey();
+                assignSplits(nextTaskId, splitAssignment);
 
-                RemoteTask task = tasks.get(node);
-                if (task == null) {
-                    scheduleTask(nextTaskId.getAndIncrement(), node, fragment.getPartitionedSource(), taskSplits.getValue());
-
-                    // tell the sub stages to create a buffer for this task
-                    addStageNode(node);
-
-                    scheduleTaskDistribution.add(System.nanoTime() - scheduleSplitStart);
+                if (!pendingSplits.isEmpty()) {
+                    waitForFreeNode(nextTaskId);
                 }
-                else {
-                    task.addSplits(fragment.getPartitionedSource(), taskSplits.getValue());
-                    addSplitDistribution.add(System.nanoTime() - scheduleSplitStart);
-                }
-
-                getSplitStart = System.nanoTime();
             }
         }
 
@@ -667,6 +654,55 @@ public class SqlStageExecution
 
         // tell sub stages there will be no more output buffers
         setNoMoreStageNodes();
+    }
+
+    private void assignSplits(AtomicInteger nextTaskId, Multimap<Node, Split> splitAssignment)
+    {
+        for (Entry<Node, Collection<Split>> taskSplits : splitAssignment.asMap().entrySet()) {
+            long scheduleSplitStart = System.nanoTime();
+            Node node = taskSplits.getKey();
+
+            RemoteTask task = tasks.get(node);
+            if (task == null) {
+                scheduleTask(nextTaskId.getAndIncrement(), node, fragment.getPartitionedSource(), taskSplits.getValue());
+
+                // tell the sub stages to create a buffer for this task
+                addStageNode(node);
+
+                scheduleTaskDistribution.add(System.nanoTime() - scheduleSplitStart);
+            }
+            else {
+                task.addSplits(fragment.getPartitionedSource(), taskSplits.getValue());
+                addSplitDistribution.add(System.nanoTime() - scheduleSplitStart);
+            }
+        }
+    }
+    private void waitForFreeNode(AtomicInteger nextTaskId)
+    {
+        // if we have sub stages...
+        if (!subStages.isEmpty()) {
+            // before we block, we need to create all possible output buffers on the sub stages, or they can deadlock
+            // waiting for the "noMoreBuffers" call
+            nodeSelector.lockDownNodes();
+            for (Node node : Sets.difference(new HashSet<>(nodeSelector.allNodes()), tasks.keySet())) {
+                scheduleTask(nextTaskId.getAndIncrement(), node);
+            }
+            // tell sub stages there will be no more output buffers
+            setNoMoreStageNodes();
+        }
+
+        synchronized (this) {
+            // otherwise wait for some tasks to complete
+            try {
+                // todo this adds latency: replace this wait with an event listener
+                TimeUnit.SECONDS.timedWait(this, 1);
+            }
+            catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw Throwables.propagate(e);
+            }
+        }
+        updateNewExchangesAndBuffers(false);
     }
 
     private void addStageNode(Node node)
@@ -680,52 +716,6 @@ public class SqlStageExecution
     {
         for (StageExecutionNode subStage : subStages.values()) {
             subStage.parentNodesAdded(ImmutableList.<Node>of(), true);
-        }
-    }
-
-    private Node chooseNode(NodeSelector nodeSelector, Split split, AtomicInteger nextTaskId)
-    {
-        while (true) {
-            // if query has been canceled, exit
-            if (getState().isDone()) {
-                return null;
-            }
-
-            // for each split, pick the node with the smallest number of assignments
-            Node chosen = nodeSelector.selectNode(split);
-
-            // if the chosen node doesn't have too many tasks already, return
-            RemoteTask task = tasks.get(chosen);
-            if (task == null || task.getQueuedSplits() < maxPendingSplitsPerNode) {
-                return chosen;
-            }
-
-            // if we have sub stages...
-            if (!subStages.isEmpty()) {
-                // before we block, we need to create all possible output buffers on the sub stages, or they can deadlock
-                // waiting for the "noMoreBuffers" call
-                nodeSelector.lockDownNodes();
-                for (Node node : Sets.difference(new HashSet<>(nodeSelector.allNodes()), tasks.keySet())) {
-                    scheduleTask(nextTaskId.getAndIncrement(), node);
-                }
-
-                // tell sub stages there will be no more output buffers
-                setNoMoreStageNodes();
-            }
-
-            synchronized (this) {
-                // otherwise wait for some tasks to complete
-                try {
-                    // todo this adds latency: replace this wait with an event listener
-                    TimeUnit.SECONDS.timedWait(this, 1);
-                }
-                catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw Throwables.propagate(e);
-                }
-            }
-
-            updateNewExchangesAndBuffers(false);
         }
     }
 

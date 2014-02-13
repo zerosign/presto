@@ -38,18 +38,21 @@ public class QueryExplainer
     public final Metadata metadata;
     public final PeriodicImportManager periodicImportManager;
     public final StorageManager storageManager;
+    public final boolean approximateQueriesEnabled;
 
     public QueryExplainer(Session session,
             List<PlanOptimizer> planOptimizers,
             Metadata metadata,
             PeriodicImportManager periodicImportManager,
-            StorageManager storageManager)
+            StorageManager storageManager,
+            boolean approximateQueriesEnabled)
     {
         this.session = checkNotNull(session, "session is null");
         this.planOptimizers = checkNotNull(planOptimizers, "planOptimizers is null");
         this.metadata = checkNotNull(metadata, "metadata is null");
         this.periodicImportManager = checkNotNull(periodicImportManager, "periodicImportManager is null");
         this.storageManager = checkNotNull(storageManager, "storageManager is null");
+        this.approximateQueriesEnabled = approximateQueriesEnabled;
     }
 
     public String getPlan(Statement statement, ExplainType.Type planType)
@@ -78,10 +81,16 @@ public class QueryExplainer
         throw new IllegalArgumentException("Unhandled plan type: " + planType);
     }
 
+    public String getJsonPlan(Statement statement)
+    {
+        Plan plan = getLogicalPlan(statement);
+        return PlanPrinter.getJsonPlanSource(plan.getRoot(), metadata);
+    }
+
     private Plan getLogicalPlan(Statement statement)
     {
         // analyze statement
-        Analyzer analyzer = new Analyzer(session, metadata, Optional.of(this));
+        Analyzer analyzer = new Analyzer(session, metadata, Optional.of(this), approximateQueriesEnabled);
 
         Analysis analysis = analyzer.analyze(statement);
         PlanNodeIdAllocator idAllocator = new PlanNodeIdAllocator();
@@ -94,7 +103,7 @@ public class QueryExplainer
     private SubPlan getDistributedPlan(Statement statement)
     {
         // analyze statement
-        Analyzer analyzer = new Analyzer(session, metadata, Optional.of(this));
+        Analyzer analyzer = new Analyzer(session, metadata, Optional.of(this), approximateQueriesEnabled);
 
         Analysis analysis = analyzer.analyze(statement);
         PlanNodeIdAllocator idAllocator = new PlanNodeIdAllocator();

@@ -24,6 +24,7 @@ import com.facebook.presto.execution.TaskExecutor.TaskHandle;
 import com.facebook.presto.operator.Driver;
 import com.facebook.presto.operator.DriverContext;
 import com.facebook.presto.operator.DriverFactory;
+import com.facebook.presto.operator.DriverStats;
 import com.facebook.presto.operator.PipelineContext;
 import com.facebook.presto.operator.TaskContext;
 import com.facebook.presto.operator.TaskOutputOperator.TaskOutputFactory;
@@ -175,7 +176,11 @@ public class SqlTaskExecution
                     if (taskState.isDone()) {
                         SqlTaskExecution.this.taskExecutor.removeTask(taskHandle);
                         // make sure buffers are cleaned up
-                        sharedBuffer.destroy();
+                        if (taskState != TaskState.FAILED) {
+                            // don't close buffers for a failed query
+                            // closed buffers signal to upstream tasks that everything finished cleanly
+                            sharedBuffer.destroy();
+                        }
                     }
                 }
             });
@@ -428,8 +433,18 @@ public class SqlTaskExecution
                         // record driver is finished
                         remainingDrivers.decrementAndGet();
 
-                        // todo add failure info to split completion event
-                        queryMonitor.splitFailedEvent(taskId, splitRunner.getDriverContext().getDriverStats(), cause);
+                        DriverContext driverContext = splitRunner.getDriverContext();
+                        DriverStats driverStats;
+                        if (driverContext != null) {
+                            driverStats = driverContext.getDriverStats();
+                        }
+                        else {
+                            // split runner did not start successfully
+                            driverStats = new DriverStats();
+                        }
+
+                        // fire failed event with cause
+                        queryMonitor.splitFailedEvent(taskId, driverStats, cause);
                     }
                 }
             }, notificationExecutor);
@@ -548,12 +563,15 @@ public class SqlTaskExecution
         private DriverSplitRunner createDriverRunner(@Nullable ScheduledSplit partitionedSplit)
         {
             pendingCreation.incrementAndGet();
-            return new DriverSplitRunner(this, partitionedSplit);
+            // create driver context immediately so the driver existence is recorded in the stats
+            // the number of drivers is used to balance work across nodes
+            DriverContext driverContext = pipelineContext.addDriverContext();
+            return new DriverSplitRunner(this, driverContext, partitionedSplit);
         }
 
-        private Driver createDriver(@Nullable ScheduledSplit partitionedSplit)
+        private Driver createDriver(DriverContext driverContext, @Nullable ScheduledSplit partitionedSplit)
         {
-            Driver driver = driverFactory.createDriver(pipelineContext.addDriverContext());
+            Driver driver = driverFactory.createDriver(driverContext);
 
             // record driver so other threads add unpartitioned sources can see the driver
             // NOTE: this MUST be done before reading unpartitionedSources, so we see a consistent view of the unpartitioned sources
@@ -598,6 +616,7 @@ public class SqlTaskExecution
             implements SplitRunner
     {
         private final DriverSplitRunnerFactory driverSplitRunnerFactory;
+        private final DriverContext driverContext;
 
         @Nullable
         private final ScheduledSplit partitionedSplit;
@@ -605,9 +624,10 @@ public class SqlTaskExecution
         @GuardedBy("this")
         private Driver driver;
 
-        private DriverSplitRunner(DriverSplitRunnerFactory driverSplitRunnerFactory, @Nullable ScheduledSplit partitionedSplit)
+        private DriverSplitRunner(DriverSplitRunnerFactory driverSplitRunnerFactory, DriverContext driverContext, @Nullable ScheduledSplit partitionedSplit)
         {
             this.driverSplitRunnerFactory = checkNotNull(driverSplitRunnerFactory, "driverFactory is null");
+            this.driverContext = checkNotNull(driverContext, "driverContext is null");
             this.partitionedSplit = partitionedSplit;
         }
 
@@ -629,7 +649,7 @@ public class SqlTaskExecution
         public synchronized ListenableFuture<?> processFor(Duration duration)
         {
             if (driver == null) {
-                driver = driverSplitRunnerFactory.createDriver(partitionedSplit);
+                driver = driverSplitRunnerFactory.createDriver(driverContext, partitionedSplit);
             }
 
             return driver.processFor(duration);

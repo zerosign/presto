@@ -28,7 +28,9 @@ import com.facebook.presto.spi.ConnectorSplitManager;
 import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.RecordSet;
+import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.split.SplitManager;
+import com.facebook.presto.sql.analyzer.AnalyzerConfig;
 import com.facebook.presto.sql.analyzer.QueryExplainer;
 import com.facebook.presto.sql.analyzer.Session;
 import com.facebook.presto.sql.analyzer.Type;
@@ -38,6 +40,7 @@ import com.facebook.presto.sql.planner.optimizations.PlanOptimizer;
 import com.facebook.presto.sql.tree.ExplainType;
 import com.facebook.presto.storage.MockStorageManager;
 import com.facebook.presto.tpch.TpchMetadata;
+import com.facebook.presto.tpch.TpchTableHandle;
 import com.facebook.presto.tuple.TupleInfo;
 import com.facebook.presto.util.MaterializedResult;
 import com.facebook.presto.util.MaterializedTuple;
@@ -54,6 +57,7 @@ import com.google.common.collect.Multimaps;
 import com.google.common.collect.Ordering;
 import io.airlift.log.Logger;
 import io.airlift.log.Logging;
+import io.airlift.tpch.TpchTable;
 import io.airlift.units.Duration;
 import org.apache.commons.math.stat.descriptive.DescriptiveStatistics;
 import org.intellij.lang.annotations.Language;
@@ -65,7 +69,6 @@ import org.skife.jdbi.v2.PreparedBatch;
 import org.skife.jdbi.v2.PreparedBatchPart;
 import org.skife.jdbi.v2.StatementContext;
 import org.skife.jdbi.v2.tweak.ResultSetMapper;
-import org.testng.Assert;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
@@ -74,30 +77,28 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import static com.facebook.presto.connector.informationSchema.InformationSchemaMetadata.INFORMATION_SCHEMA;
 import static com.facebook.presto.metadata.FunctionRegistry.supplier;
-import static com.facebook.presto.sql.analyzer.Session.DEFAULT_CATALOG;
-import static com.facebook.presto.sql.analyzer.Session.DEFAULT_SCHEMA;
 import static com.facebook.presto.sql.analyzer.Type.BIGINT;
 import static com.facebook.presto.sql.tree.ExplainType.Type.DISTRIBUTED;
 import static com.facebook.presto.sql.tree.ExplainType.Type.LOGICAL;
-import static com.facebook.presto.tpch.TpchMetadata.TPCH_LINEITEM_METADATA;
-import static com.facebook.presto.tpch.TpchMetadata.TPCH_LINEITEM_NAME;
-import static com.facebook.presto.tpch.TpchMetadata.TPCH_ORDERS_METADATA;
-import static com.facebook.presto.tpch.TpchMetadata.TPCH_ORDERS_NAME;
-import static com.facebook.presto.tpch.TpchMetadata.TPCH_SCHEMA_NAME;
+import static com.facebook.presto.tpch.TpchMetadata.TINY_SCHEMA_NAME;
+import static com.facebook.presto.tpch.TpchRecordSet.createTpchRecordSet;
 import static com.facebook.presto.tuple.TupleInfo.SINGLE_LONG;
 import static com.facebook.presto.tuple.TupleInfo.Type.BOOLEAN;
 import static com.facebook.presto.tuple.TupleInfo.Type.DOUBLE;
 import static com.facebook.presto.tuple.TupleInfo.Type.FIXED_INT_64;
 import static com.facebook.presto.tuple.TupleInfo.Type.VARIABLE_BINARY;
-import static com.facebook.presto.util.InMemoryTpchBlocksProvider.readTpchRecords;
 import static com.facebook.presto.util.MaterializedResult.resultBuilder;
 import static com.google.common.base.Charsets.UTF_8;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.Iterables.transform;
+import static io.airlift.tpch.TpchTable.LINE_ITEM;
+import static io.airlift.tpch.TpchTable.ORDERS;
+import static io.airlift.tpch.TpchTable.tableNameGetter;
 import static java.lang.String.format;
 import static java.util.Collections.nCopies;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -115,8 +116,10 @@ public abstract class AbstractTestQueries
             .build();
 
     private Handle handle;
+    private Session session;
 
-    @Test void testSpecialFloatingPointValues()
+    @Test
+    public void testSpecialFloatingPointValues()
             throws Exception
     {
         MaterializedResult actual = computeActual("SELECT nan(), infinity(), -infinity()");
@@ -296,6 +299,22 @@ public abstract class AbstractTestQueries
     }
 
     @Test
+    public void test15WayGroupBy()
+            throws Exception
+    {
+        // Among other things, this test verifies we are not getting for overflow in the distributed HashPagePartitionFunction
+        assertQuery("" +
+                "SELECT " +
+                "    orderkey + 1, orderkey + 2, orderkey + 3, orderkey + 4, orderkey + 5, " +
+                "    orderkey + 6, orderkey + 7, orderkey + 8, orderkey + 9, orderkey + 10, " +
+                "    count(*) " +
+                "FROM orders " +
+                "GROUP BY " +
+                "    orderkey + 1, orderkey + 2, orderkey + 3, orderkey + 4, orderkey + 5, " +
+                "    orderkey + 6, orderkey + 7, orderkey + 8, orderkey + 9, orderkey + 10");
+    }
+
+    @Test
     public void testDistinctMultipleFields()
             throws Exception
     {
@@ -386,6 +405,18 @@ public abstract class AbstractTestQueries
                         "SUM(custkey + 1.0), " +
                         "AVG(custkey), " +
                         "VARIANCE(custkey) FROM (SELECT DISTINCT custkey FROM orders) t");
+    }
+
+    @Test
+    public void testDistinctLimit()
+            throws Exception
+    {
+        assertQuery("" +
+                "SELECT DISTINCT orderstatus, custkey " +
+                "FROM (SELECT orderstatus, custkey FROM orders ORDER BY orderkey LIMIT 10) " +
+                "LIMIT 10");
+        assertQuery("SELECT COUNT(*) FROM (SELECT DISTINCT orderstatus, custkey FROM orders LIMIT 10)");
+        assertQuery("SELECT DISTINCT custkey, orderstatus FROM orders WHERE custkey = 1268 LIMIT 2");
     }
 
     @Test
@@ -2139,43 +2170,56 @@ public abstract class AbstractTestQueries
     }
 
     @Test
+    public void testShowCatalogs()
+            throws Exception
+    {
+        MaterializedResult result = computeActual("SHOW CATALOGS");
+        Set<String> catalogNames = ImmutableSet.copyOf(transform(result.getMaterializedTuples(), onlyColumnGetter()));
+        assertTrue(catalogNames.contains(session.getCatalog()));
+    }
+
+    @Test
     public void testShowSchemas()
             throws Exception
     {
         MaterializedResult result = computeActual("SHOW SCHEMAS");
         ImmutableSet<String> schemaNames = ImmutableSet.copyOf(transform(result.getMaterializedTuples(), onlyColumnGetter()));
-        assertEquals(schemaNames, ImmutableSet.of(TPCH_SCHEMA_NAME, INFORMATION_SCHEMA, "sys"));
+        assertTrue(schemaNames.containsAll(ImmutableSet.of(session.getSchema(), INFORMATION_SCHEMA, "sys")));
     }
 
     @Test
     public void testShowSchemasFrom()
             throws Exception
     {
-        MaterializedResult result = computeActual(String.format("SHOW SCHEMAS FROM %s", TpchMetadata.TPCH_CATALOG_NAME));
+        MaterializedResult result = computeActual(format("SHOW SCHEMAS FROM %s", session.getCatalog()));
         ImmutableSet<String> schemaNames = ImmutableSet.copyOf(transform(result.getMaterializedTuples(), onlyColumnGetter()));
-        assertEquals(schemaNames, ImmutableSet.of(TPCH_SCHEMA_NAME, INFORMATION_SCHEMA, "sys"));
+        assertTrue(schemaNames.containsAll(ImmutableSet.of(session.getSchema(), INFORMATION_SCHEMA, "sys")));
     }
 
     @Test
     public void testShowTables()
             throws Exception
     {
+        Set<String> expectedTables = ImmutableSet.copyOf(transform(TpchTable.getTables(), tableNameGetter()));
+
         MaterializedResult result = computeActual("SHOW TABLES");
-        ImmutableSet<String> tableNames = ImmutableSet.copyOf(transform(result.getMaterializedTuples(), onlyColumnGetter()));
-        assertEquals(tableNames, ImmutableSet.of(TPCH_ORDERS_NAME, TPCH_LINEITEM_NAME));
+        Set<String> tableNames = ImmutableSet.copyOf(transform(result.getMaterializedTuples(), onlyColumnGetter()));
+        assertEquals(tableNames, expectedTables);
     }
 
     @Test
     public void testShowTablesFrom()
             throws Exception
     {
-        MaterializedResult result = computeActual("SHOW TABLES FROM DEFAULT");
-        ImmutableSet<String> tableNames = ImmutableSet.copyOf(transform(result.getMaterializedTuples(), onlyColumnGetter()));
-        assertEquals(tableNames, ImmutableSet.of(TPCH_ORDERS_NAME, TPCH_LINEITEM_NAME));
+        Set<String> expectedTables = ImmutableSet.copyOf(transform(TpchTable.getTables(), tableNameGetter()));
 
-        result = computeActual("SHOW TABLES FROM TPCH.DEFAULT");
+        MaterializedResult result = computeActual("SHOW TABLES FROM " + session.getSchema());
+        Set<String> tableNames = ImmutableSet.copyOf(transform(result.getMaterializedTuples(), onlyColumnGetter()));
+        assertEquals(tableNames, expectedTables);
+
+        result = computeActual("SHOW TABLES FROM " + session.getCatalog() + "." + session.getSchema());
         tableNames = ImmutableSet.copyOf(transform(result.getMaterializedTuples(), onlyColumnGetter()));
-        assertEquals(tableNames, ImmutableSet.of(TPCH_ORDERS_NAME, TPCH_LINEITEM_NAME));
+        assertEquals(tableNames, expectedTables);
 
         result = computeActual("SHOW TABLES FROM UNKNOWN");
         tableNames = ImmutableSet.copyOf(transform(result.getMaterializedTuples(), onlyColumnGetter()));
@@ -2188,7 +2232,7 @@ public abstract class AbstractTestQueries
     {
         MaterializedResult result = computeActual("SHOW TABLES LIKE 'or%'");
         ImmutableSet<String> tableNames = ImmutableSet.copyOf(transform(result.getMaterializedTuples(), onlyColumnGetter()));
-        assertEquals(tableNames, ImmutableSet.of(TPCH_ORDERS_NAME));
+        assertEquals(tableNames, ImmutableSet.of(ORDERS.getTableName()));
     }
 
     @Test
@@ -2259,6 +2303,27 @@ public abstract class AbstractTestQueries
         assertEquals(functions.get("split_part").asList().get(0).getField(1), "varchar");
         assertEquals(functions.get("split_part").asList().get(0).getField(2), "varchar, varchar, bigint");
         assertEquals(functions.get("split_part").asList().get(0).getField(3), "scalar");
+    }
+
+    @Test
+    public void testInformationSchemaFiltering()
+            throws Exception
+    {
+        assertQuery(
+                "SELECT table_name FROM information_schema.tables WHERE table_name = 'orders' LIMIT 1",
+                "SELECT 'orders' table_name");
+    }
+
+    @Test
+    public void testSelectColumnOfNulls()
+            throws Exception
+    {
+        // Currently nulls can confuse the local planner, so select some
+        assertQueryOrdered("SELECT \n" +
+                " CAST(NULL AS VARCHAR),\n" +
+                " CAST(NULL AS BIGINT)\n" +
+                "FROM ORDERS\n" +
+                " ORDER BY 1\n");
     }
 
     @Test
@@ -2740,10 +2805,10 @@ public abstract class AbstractTestQueries
                 "  WHERE rand() * 1000 > table1.col1b\n" +
                 ")");
         MaterializedTuple tuple = Iterables.getOnlyElement(materializedResult.getMaterializedTuples());
-        Assert.assertEquals(tuple.getFieldCount(), 1);
+        assertEquals(tuple.getFieldCount(), 1);
         long count = (Long) tuple.getField(0);
         // Technically non-deterministic unit test but has essentially a next to impossible chance of a false positive
-        Assert.assertTrue(count > 0 && count < 1000000);
+        assertTrue(count > 0 && count < 1000000);
     }
 
     @Test
@@ -2766,10 +2831,10 @@ public abstract class AbstractTestQueries
                 ")\n" +
                 "WHERE rand() > 0.5");
         MaterializedTuple tuple = Iterables.getOnlyElement(materializedResult.getMaterializedTuples());
-        Assert.assertEquals(tuple.getFieldCount(), 1);
+        assertEquals(tuple.getFieldCount(), 1);
         long count = (Long) tuple.getField(0);
         // Technically non-deterministic unit test but has essentially a next to impossible chance of a false positive
-        Assert.assertTrue(count > 0 && count < 1000);
+        assertTrue(count > 0 && count < 1000);
     }
 
     @Test
@@ -2786,10 +2851,10 @@ public abstract class AbstractTestQueries
                 ")\n" +
                 "WHERE rand() > 0.5");
         MaterializedTuple tuple = Iterables.getOnlyElement(materializedResult.getMaterializedTuples());
-        Assert.assertEquals(tuple.getFieldCount(), 1);
+        assertEquals(tuple.getFieldCount(), 1);
         long count = (Long) tuple.getField(0);
         // Technically non-deterministic unit test but has essentially a next to impossible chance of a false positive
-        Assert.assertTrue(count > 0 && count < 1000);
+        assertTrue(count > 0 && count < 1000);
     }
 
     @Test
@@ -2836,7 +2901,7 @@ public abstract class AbstractTestQueries
         }
 
         double mean = stats.getGeometricMean();
-        assertTrue(mean > 0.45 && mean < 0.55, String.format("Expected mean sampling rate to be ~0.5, but was %s", mean));
+        assertTrue(mean > 0.45 && mean < 0.55, format("Expected mean sampling rate to be ~0.5, but was %s", mean));
     }
 
     @Test(expectedExceptions = RuntimeException.class, expectedExceptionsMessageRegExp = "\\QUnexpected parameters (bigint) for function length. Expected: length(varchar)\\E")
@@ -2901,7 +2966,8 @@ public abstract class AbstractTestQueries
                 "  SELECT orderstatus, clerk, sum(totalprice) sales\n" +
                 "  FROM orders\n" +
                 "  GROUP BY orderstatus, clerk\n" +
-                ")";
+                ")\n" +
+                "ORDER BY orderstatus, clerk";
 
         assertEquals(computeActual(sql), computeActual(sql.replace("custom_rank", "rank")));
     }
@@ -2913,8 +2979,8 @@ public abstract class AbstractTestQueries
         Logging.initialize();
 
         handle = DBI.open("jdbc:h2:mem:test" + System.nanoTime());
+        TpchMetadata tpchMetadata = new TpchMetadata("");
 
-        RecordSet ordersRecords = readTpchRecords(TPCH_ORDERS_METADATA);
         handle.execute("CREATE TABLE orders (\n" +
                 "  orderkey BIGINT PRIMARY KEY,\n" +
                 "  custkey BIGINT NOT NULL,\n" +
@@ -2926,9 +2992,9 @@ public abstract class AbstractTestQueries
                 "  shippriority BIGINT NOT NULL,\n" +
                 "  comment VARCHAR(79) NOT NULL\n" +
                 ")");
-        insertRows(TPCH_ORDERS_METADATA, handle, ordersRecords);
+        TpchTableHandle ordersHandle = tpchMetadata.getTableHandle(new SchemaTableName(TINY_SCHEMA_NAME, ORDERS.getTableName()));
+        insertRows(tpchMetadata.getTableMetadata(ordersHandle), handle, createTpchRecordSet(ORDERS, ordersHandle.getScaleFactor()));
 
-        RecordSet lineItemRecords = readTpchRecords(TPCH_LINEITEM_METADATA);
         handle.execute("CREATE TABLE lineitem (\n" +
                 "  orderkey BIGINT,\n" +
                 "  partkey BIGINT NOT NULL,\n" +
@@ -2948,9 +3014,10 @@ public abstract class AbstractTestQueries
                 "  comment VARCHAR(44) NOT NULL,\n" +
                 "  PRIMARY KEY (orderkey, linenumber)" +
                 ")");
-        insertRows(TPCH_LINEITEM_METADATA, handle, lineItemRecords);
+        TpchTableHandle lineItemHandle = tpchMetadata.getTableHandle(new SchemaTableName(TINY_SCHEMA_NAME, LINE_ITEM.getTableName()));
+        insertRows(tpchMetadata.getTableMetadata(lineItemHandle), handle, createTpchRecordSet(LINE_ITEM, lineItemHandle.getScaleFactor()));
 
-        setUpQueryFramework(TpchMetadata.TPCH_CATALOG_NAME, TpchMetadata.TPCH_SCHEMA_NAME);
+        session = setUpQueryFramework();
     }
 
     @AfterClass(alwaysRun = true)
@@ -2963,7 +3030,7 @@ public abstract class AbstractTestQueries
 
     protected abstract int getNodeCount();
 
-    protected abstract void setUpQueryFramework(String catalog, String schema)
+    protected abstract Session setUpQueryFramework()
             throws Exception;
 
     protected void tearDownQueryFramework()
@@ -3032,7 +3099,7 @@ public abstract class AbstractTestQueries
         }
     }
 
-    private MaterializedResult computeExpected(@Language("SQL") final String sql, List<TupleInfo> resultTupleInfos)
+    protected MaterializedResult computeExpected(@Language("SQL") String sql, List<TupleInfo> resultTupleInfos)
     {
         return new MaterializedResult(
                 handle.createQuery(sql)
@@ -3151,25 +3218,25 @@ public abstract class AbstractTestQueries
         };
     }
 
-    private static String getExplainPlan(String query, ExplainType.Type planType)
+    private String getExplainPlan(String query, ExplainType.Type planType)
     {
         QueryExplainer explainer = getQueryExplainer();
         return explainer.getPlan(SqlParser.createStatement(query), planType);
     }
 
-    private static String getGraphvizExplainPlan(String query, ExplainType.Type planType)
+    private String getGraphvizExplainPlan(String query, ExplainType.Type planType)
     {
         QueryExplainer explainer = getQueryExplainer();
         return explainer.getGraphvizPlan(SqlParser.createStatement(query), planType);
     }
 
-    private static QueryExplainer getQueryExplainer()
+    private QueryExplainer getQueryExplainer()
     {
-        Session session = new Session("user", "test", DEFAULT_CATALOG, DEFAULT_SCHEMA, null, null);
         MetadataManager metadata = new MetadataManager();
         metadata.addInternalSchemaMetadata(MetadataManager.INTERNAL_CONNECTOR_ID, new DualMetadata());
         SplitManager splitManager = new SplitManager(ImmutableSet.<ConnectorSplitManager>of(new DualSplitManager(new InMemoryNodeManager())));
-        List<PlanOptimizer> optimizers = new PlanOptimizersFactory(metadata, splitManager).get();
-        return new QueryExplainer(session, optimizers, metadata, new MockPeriodicImportManager(), new MockStorageManager());
+        AnalyzerConfig analyzerConfig = new AnalyzerConfig().setApproximateQueriesEnabled(true);
+        List<PlanOptimizer> optimizers = new PlanOptimizersFactory(metadata, splitManager, analyzerConfig).get();
+        return new QueryExplainer(session, optimizers, metadata, new MockPeriodicImportManager(), new MockStorageManager(), analyzerConfig.isApproximateQueriesEnabled());
     }
 }

@@ -13,12 +13,15 @@
  */
 package com.facebook.presto.sql.planner;
 
+import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.TupleDomain;
 import com.facebook.presto.sql.analyzer.Type;
 import com.facebook.presto.sql.planner.PlanFragment.OutputPartitioning;
 import com.facebook.presto.sql.planner.PlanFragment.PlanDistribution;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
+import com.facebook.presto.sql.planner.plan.DistinctLimitNode;
+import com.facebook.presto.sql.planner.plan.MaterializeSampleNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.JoinNode;
@@ -44,6 +47,7 @@ import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.FunctionCall;
 import com.facebook.presto.sql.tree.QualifiedNameReference;
 import com.facebook.presto.util.GraphvizPrinter;
+import com.facebook.presto.util.JsonPlanPrinter;
 import com.google.common.base.Function;
 import com.google.common.base.Functions;
 import com.google.common.base.Joiner;
@@ -84,6 +88,11 @@ public class PlanPrinter
     public static String textLogicalPlan(PlanNode plan, Map<Symbol, Type> types)
     {
         return new PlanPrinter(plan, types, Optional.<Map<PlanFragmentId, PlanFragment>>absent()).toString();
+    }
+
+    public static String getJsonPlanSource(PlanNode plan, Metadata metadata)
+    {
+        return JsonPlanPrinter.getPlan(plan, metadata);
     }
 
     public static String textDistributedPlan(SubPlan plan)
@@ -165,6 +174,13 @@ public class PlanPrinter
         }
 
         @Override
+        public Void visitDistinctLimit(DistinctLimitNode node, Integer indent)
+        {
+            print(indent, "- DistinctLimit[%s] => [%s]", node.getLimit(), formatOutputs(node.getOutputSymbols()));
+            return processChildren(node, indent + 1);
+        }
+
+        @Override
         public Void visitAggregation(AggregationNode node, Integer indent)
         {
             String type = "";
@@ -175,8 +191,12 @@ public class PlanPrinter
             if (!node.getGroupBy().isEmpty()) {
                 key = node.getGroupBy().toString();
             }
+            String sampleWeight = "";
+            if (node.getSampleWeight().isPresent()) {
+                sampleWeight = format("[sampleWeight = %s]", node.getSampleWeight().get());
+            }
 
-            print(indent, "- Aggregate%s%s => [%s]", type, key, formatOutputs(node.getOutputSymbols()));
+            print(indent, "- Aggregate%s%s%s => [%s]", type, key, sampleWeight, formatOutputs(node.getOutputSymbols()));
 
             for (Map.Entry<Symbol, FunctionCall> entry : node.getAggregations().entrySet()) {
                 if (node.getMasks().containsKey(entry.getKey())) {
@@ -301,6 +321,13 @@ public class PlanPrinter
             });
 
             print(indent, "- TopN[%s by (%s)] => [%s]", node.getCount(), Joiner.on(", ").join(keys), formatOutputs(node.getOutputSymbols()));
+            return processChildren(node, indent + 1);
+        }
+
+        @Override
+        public Void visitMaterializeSample(final MaterializeSampleNode node, Integer indent)
+        {
+            print(indent, "- MaterializeSample[%s] => [%s]", node.getSampleWeightSymbol(), formatOutputs(node.getOutputSymbols()));
             return processChildren(node, indent + 1);
         }
 
