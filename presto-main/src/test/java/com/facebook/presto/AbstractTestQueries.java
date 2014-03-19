@@ -15,7 +15,6 @@ package com.facebook.presto;
 
 import com.facebook.presto.connector.dual.DualMetadata;
 import com.facebook.presto.connector.dual.DualSplitManager;
-import com.facebook.presto.importer.MockPeriodicImportManager;
 import com.facebook.presto.metadata.FunctionInfo;
 import com.facebook.presto.metadata.FunctionRegistry;
 import com.facebook.presto.metadata.InMemoryNodeManager;
@@ -38,7 +37,6 @@ import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.PlanOptimizersFactory;
 import com.facebook.presto.sql.planner.optimizations.PlanOptimizer;
 import com.facebook.presto.sql.tree.ExplainType;
-import com.facebook.presto.storage.MockStorageManager;
 import com.facebook.presto.tpch.TpchMetadata;
 import com.facebook.presto.tpch.TpchTableHandle;
 import com.facebook.presto.tuple.TupleInfo;
@@ -59,7 +57,7 @@ import io.airlift.log.Logger;
 import io.airlift.log.Logging;
 import io.airlift.tpch.TpchTable;
 import io.airlift.units.Duration;
-import org.apache.commons.math.stat.descriptive.DescriptiveStatistics;
+import org.apache.commons.math3.stat.descriptive.DescriptiveStatistics;
 import org.intellij.lang.annotations.Language;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
@@ -117,6 +115,25 @@ public abstract class AbstractTestQueries
 
     private Handle handle;
     private Session session;
+
+    @Test
+    public void testValues()
+            throws Exception
+    {
+        assertQuery("VALUES (1.1, 2, 'foo'), (sin(3.3), 2+2, 'bar')");
+        assertQuery("VALUES (1.1, 2), (sin(3.3), 2+2) ORDER BY 1", "VALUES (sin(3.3), 2+2), (1.1, 2)");
+        assertQuery("VALUES (1.1, 2), (sin(3.3), 2+2) LIMIT 1", "VALUES (1.1, 2)");
+        assertQuery("SELECT * FROM (VALUES (1.1, 2), (sin(3.3), 2+2))");
+        assertQuery(
+                "SELECT * FROM (VALUES (1.1, 2), (sin(3.3), 2+2)) x (a, b) LEFT JOIN (VALUES (1.1, 2), (1.1, 2+2)) y (a, b) USING (a)",
+                "VALUES (1.1, 2, 1.1, 4), (1.1, 2, 1.1, 2), (sin(3.3), 4, NULL, NULL)");
+        assertQuery("SELECT 1.1 in (VALUES (1.1), (2.2))", "VALUES (TRUE)");
+
+        assertQuery("" +
+                "WITH a AS (VALUES (1.1, 2), (sin(3.3), 2+2)) " +
+                "SELECT * FROM a",
+                "VALUES (1.1, 2), (sin(3.3), 2+2)");
+    }
 
     @Test
     public void testSpecialFloatingPointValues()
@@ -351,6 +368,16 @@ public abstract class AbstractTestQueries
             throws Exception
     {
         assertQuery("SELECT COUNT(DISTINCT clerk) as count, orderdate FROM orders GROUP BY orderdate ORDER BY count");
+    }
+
+    @Test
+    public void testDistinctHaving()
+            throws Exception
+    {
+        assertQuery("SELECT COUNT(DISTINCT clerk) AS count " +
+                "FROM orders " +
+                "GROUP BY orderdate " +
+                "HAVING COUNT(DISTINCT clerk) > 1");
     }
 
     @Test
@@ -1635,6 +1662,16 @@ public abstract class AbstractTestQueries
     }
 
     @Test
+    public void testJoinEffectivePredicateWithNoRanges()
+            throws Exception
+    {
+        assertQuery("" +
+                "SELECT * FROM orders a " +
+                "   JOIN (SELECT * FROM orders WHERE orderkey IS NULL) b " +
+                "   ON a.orderkey = b.orderkey");
+    }
+
+    @Test
     public void testColumnAliases()
             throws Exception
     {
@@ -1805,7 +1842,7 @@ public abstract class AbstractTestQueries
         assertQuery("SELECT \"TOTALPRICE\" \"my price\" FROM \"ORDERS\"");
     }
 
-    @Test(expectedExceptions = Exception.class, expectedExceptionsMessageRegExp = ".*orderkey_1.*")
+    @Test(expectedExceptions = RuntimeException.class, expectedExceptionsMessageRegExp = ".*orderkey_1.*")
     public void testInvalidColumn()
             throws Exception
     {
@@ -2471,6 +2508,16 @@ public abstract class AbstractTestQueries
     }
 
     @Test
+    public void testRandCrossJoins()
+            throws Exception
+    {
+        assertQuery("" +
+                "SELECT COUNT(*) " +
+                "FROM (SELECT * FROM orders ORDER BY rand() LIMIT 5) a " +
+                "CROSS JOIN (SELECT * FROM lineitem ORDER BY rand() LIMIT 5) b");
+    }
+
+    @Test
     public void testCrossJoins()
             throws Exception
     {
@@ -2904,6 +2951,41 @@ public abstract class AbstractTestQueries
         assertTrue(mean > 0.45 && mean < 0.55, format("Expected mean sampling rate to be ~0.5, but was %s", mean));
     }
 
+    @Test
+    public void testTableSamplePoissonized()
+            throws Exception
+    {
+        DescriptiveStatistics stats = new DescriptiveStatistics();
+
+        int total = computeExpected("SELECT orderkey FROM orders", ImmutableList.of(SINGLE_LONG)).getMaterializedTuples().size();
+
+        for (int i = 0; i < 100; i++) {
+            List<MaterializedTuple> values = computeActual("SELECT orderkey FROM ORDERS TABLESAMPLE POISSONIZED (50)").getMaterializedTuples();
+            stats.addValue(values.size() * 1.0 / total);
+        }
+
+        double mean = stats.getGeometricMean();
+        assertTrue(mean > 0.45 && mean < 0.55, format("Expected mean sampling rate to be ~0.5, but was %s", mean));
+    }
+
+    @Test
+    public void testTableSamplePoissonizedRescaled()
+            throws Exception
+    {
+        DescriptiveStatistics stats = new DescriptiveStatistics();
+
+        long total = (long) computeExpected("SELECT COUNT(*) FROM orders", ImmutableList.of(TupleInfo.SINGLE_LONG)).getMaterializedTuples().get(0).getField(0);
+
+        for (int i = 0; i < 100; i++) {
+            long value = (long) computeActual("SELECT COUNT(*) FROM orders TABLESAMPLE POISSONIZED (50) RESCALED").getMaterializedTuples().get(0).getField(0);
+            stats.addValue(value * 1.0 / total);
+        }
+
+        double mean = stats.getGeometricMean();
+        assertTrue(mean > 0.90 && mean < 1.1, format("Expected sample to be rescaled to ~1.0, but was %s", mean));
+        assertTrue(stats.getVariance() > 0, "Samples all had the exact same size");
+    }
+
     @Test(expectedExceptions = RuntimeException.class, expectedExceptionsMessageRegExp = "\\QUnexpected parameters (bigint) for function length. Expected: length(varchar)\\E")
     public void testFunctionNotRegistered()
     {
@@ -2926,7 +3008,7 @@ public abstract class AbstractTestQueries
                         MILLISECONDS.toSeconds(new DateTime(1970, 1, 1, 3, 4, 0, 0, DateTimeZone.UTC).getMillis()) + ",  " +
                         MILLISECONDS.toSeconds(new DateTime(1960, 1, 22, 3, 4, 0, 0, DateTimeZone.UTC).getMillis()) + ",  " +
                         MILLISECONDS.toSeconds(new DateTime(2013, 3, 22, 0, 0, 0, 0, DateTimeZone.UTC).getMillis()) + ",  " +
-                        String.valueOf(TimeUnit.DAYS.toSeconds(123)));
+                        TimeUnit.DAYS.toSeconds(123));
     }
 
     @Test
@@ -2992,6 +3074,7 @@ public abstract class AbstractTestQueries
                 "  shippriority BIGINT NOT NULL,\n" +
                 "  comment VARCHAR(79) NOT NULL\n" +
                 ")");
+        handle.execute("CREATE INDEX custkey_index ON orders (custkey)");
         TpchTableHandle ordersHandle = tpchMetadata.getTableHandle(new SchemaTableName(TINY_SCHEMA_NAME, ORDERS.getTableName()));
         insertRows(tpchMetadata.getTableMetadata(ordersHandle), handle, createTpchRecordSet(ORDERS, ordersHandle.getScaleFactor()));
 
@@ -3071,9 +3154,11 @@ public abstract class AbstractTestQueries
     {
         long start = System.nanoTime();
         MaterializedResult actualResults = computeActual(actual);
-        log.info("FINISHED in %s", Duration.nanosSince(start));
+        Duration actualTime = Duration.nanosSince(start);
 
+        long expectedStart = System.nanoTime();
         MaterializedResult expectedResults = computeExpected(expected, actualResults.getTupleInfos());
+        log.info("FINISHED in presto: %s, h2: %s, total: %s", actualTime, Duration.nanosSince(expectedStart), Duration.nanosSince(start));
 
         if (ensureOrdering) {
             assertEquals(actualResults.getMaterializedTuples(), expectedResults.getMaterializedTuples());
@@ -3235,8 +3320,8 @@ public abstract class AbstractTestQueries
         MetadataManager metadata = new MetadataManager();
         metadata.addInternalSchemaMetadata(MetadataManager.INTERNAL_CONNECTOR_ID, new DualMetadata());
         SplitManager splitManager = new SplitManager(ImmutableSet.<ConnectorSplitManager>of(new DualSplitManager(new InMemoryNodeManager())));
-        AnalyzerConfig analyzerConfig = new AnalyzerConfig().setApproximateQueriesEnabled(true);
+        AnalyzerConfig analyzerConfig = new AnalyzerConfig().setExperimentalSyntaxEnabled(true);
         List<PlanOptimizer> optimizers = new PlanOptimizersFactory(metadata, splitManager, analyzerConfig).get();
-        return new QueryExplainer(session, optimizers, metadata, new MockPeriodicImportManager(), new MockStorageManager(), analyzerConfig.isApproximateQueriesEnabled());
+        return new QueryExplainer(session, optimizers, metadata, analyzerConfig.isExperimentalSyntaxEnabled());
     }
 }

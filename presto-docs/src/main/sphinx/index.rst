@@ -8,5 +8,7 @@ Presto Documentation
 
     installation
     functions
+    types
     sql
+    migration
     release

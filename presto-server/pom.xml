@@ -5,7 +5,7 @@
     <parent>
         <groupId>com.facebook.presto</groupId>
         <artifactId>presto-root</artifactId>
-        <version>0.60</version>
+        <version>0.61</version>
     </parent>
 
     <artifactId>presto-server</artifactId>
@@ -215,8 +215,8 @@
 
         <!-- should be scope test but is needed transitively -->
         <dependency>
-            <groupId>commons-math</groupId>
-            <artifactId>commons-math</artifactId>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-math3</artifactId>
             <scope>runtime</scope>
         </dependency>
 

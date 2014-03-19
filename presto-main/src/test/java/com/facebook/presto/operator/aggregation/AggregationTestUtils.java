@@ -22,15 +22,18 @@ import com.facebook.presto.operator.GroupByIdBlock;
 import com.facebook.presto.operator.Page;
 import com.facebook.presto.tuple.TupleInfo;
 import com.google.common.base.Optional;
+import com.google.common.base.Splitter;
 import com.google.common.primitives.Ints;
 import io.airlift.slice.Slices;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 
 import static com.facebook.presto.tuple.TupleInfo.SINGLE_BOOLEAN;
 import static com.facebook.presto.tuple.Tuples.NULL_BOOLEAN_TUPLE;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertTrue;
 
 public final class AggregationTestUtils
 {
@@ -46,6 +49,63 @@ public final class AggregationTestUtils
         else {
             assertAggregation(function, confidence, expectedValue, new Page(positions, blocks));
         }
+    }
+
+    public static void assertApproximateAggregation(BootstrappedAggregation function, int sampleWeightChannel, double confidence, double expectedValue, int seed, Page... pages)
+    {
+        assertTrue(approximateAggregationWithinErrorBound(function, sampleWeightChannel, confidence, expectedValue, seed, pages));
+        assertTrue(partialApproximateAggregationWithinErrorBound(function, sampleWeightChannel, confidence, expectedValue, seed, pages));
+        assertTrue(groupedApproximateAggregationWithinErrorBound(function, sampleWeightChannel, confidence, expectedValue, seed, pages));
+    }
+
+    public static boolean approximateAggregationWithinErrorBound(BootstrappedAggregation function, int sampleWeightChannel, double confidence, double expectedValue, int seed, Page... pages)
+    {
+        Accumulator accumulator = function.createDeterministicAggregation(Optional.<Integer>absent(), sampleWeightChannel, confidence, seed, 0);
+        for (Page page : pages) {
+            accumulator.addInput(page);
+        }
+        Block result = accumulator.evaluateFinal();
+
+        return withinErrorBound(BlockAssertions.toValues(result).get(0).toString(), expectedValue);
+    }
+
+    public static boolean partialApproximateAggregationWithinErrorBound(BootstrappedAggregation function, int sampleWeightChannel, double confidence, double expectedValue, int seed, Page... pages)
+    {
+        Accumulator partialAccumulator = function.createDeterministicAggregation(Optional.<Integer>absent(), sampleWeightChannel, confidence, seed, 0);
+        for (Page page : pages) {
+            if (page.getPositionCount() > 0) {
+                partialAccumulator.addInput(page);
+            }
+        }
+
+        Block partialBlock = partialAccumulator.evaluateIntermediate();
+
+        Accumulator finalAggregation = function.createDeterministicIntermediateAggregation(confidence, 0);
+        finalAggregation.addIntermediate(partialBlock);
+
+        Block finalBlock = finalAggregation.evaluateFinal();
+
+        return withinErrorBound(BlockAssertions.toValues(finalBlock).get(0).toString(), expectedValue);
+    }
+
+    public static boolean groupedApproximateAggregationWithinErrorBound(BootstrappedAggregation function, int sampleWeightChannel, double confidence, double expectedValue, int seed, Page... pages)
+    {
+        GroupedAccumulator groupedAggregation = function.createDeterministicGroupedAggregation(Optional.<Integer>absent(), sampleWeightChannel, confidence, seed, 0);
+        for (Page page : pages) {
+            groupedAggregation.addInput(createGroupByIdBlock(0, page.getPositionCount()), page);
+        }
+        Object groupValue = getGroupValue(groupedAggregation, 0);
+
+        return withinErrorBound(groupValue.toString(), expectedValue);
+    }
+
+    private static boolean withinErrorBound(String approximateValue, double expected)
+    {
+        List<String> parts = Splitter.on(' ').splitToList(approximateValue);
+        double actual = Double.parseDouble(parts.get(0));
+        double error = Double.parseDouble(parts.get(2));
+
+        return Math.abs(expected - actual) <= error;
     }
 
     public static void assertAggregation(AggregationFunction function, double confidence, Object expectedValue, Page... pages)
@@ -161,6 +221,9 @@ public final class AggregationTestUtils
         Block partialBlock = partialAggregation.evaluateIntermediate();
 
         Accumulator finalAggregation = function.createIntermediateAggregation(confidence);
+        // Test handling of empty intermediate blocks
+        Block emptyBlock = function.createAggregation(Optional.<Integer>absent(), Optional.<Integer>absent(), confidence, args).evaluateIntermediate();
+        finalAggregation.addIntermediate(emptyBlock);
         finalAggregation.addIntermediate(partialBlock);
 
         Block finalBlock = finalAggregation.evaluateFinal();
@@ -232,6 +295,13 @@ public final class AggregationTestUtils
         UncompressedBlock partialBlock = partialOut.build();
 
         GroupedAccumulator finalAggregation = function.createGroupedIntermediateAggregation(confidence);
+        // Add an empty block to test the handling of empty intermediates
+        GroupedAccumulator emptyAggregation = function.createGroupedAggregation(Optional.<Integer>absent(), Optional.<Integer>absent(), confidence, args);
+        BlockBuilder emptyOut = new BlockBuilder(emptyAggregation.getIntermediateTupleInfo());
+        emptyAggregation.evaluateIntermediate(0, emptyOut);
+        UncompressedBlock emptyBlock = emptyOut.build();
+        finalAggregation.addIntermediate(createGroupByIdBlock(0, emptyBlock.getPositionCount()), emptyBlock);
+
         finalAggregation.addIntermediate(createGroupByIdBlock(0, partialBlock.getPositionCount()), partialBlock);
 
         return getGroupValue(finalAggregation, 0);

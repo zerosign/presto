@@ -33,6 +33,7 @@ import static java.util.concurrent.Executors.newCachedThreadPool;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
 
+@Test(singleThreaded = true)
 public class TestCachingCassandraSchemaProvider
 {
     private static final String CONNECTOR_ID = "test-cassandra";
@@ -46,6 +47,7 @@ public class TestCachingCassandraSchemaProvider
         mockSession = new MockCassandraSession(CONNECTOR_ID);
         ListeningExecutorService executor = listeningDecorator(newCachedThreadPool(new ThreadFactoryBuilder().setDaemon(true).build()));
         schemaProvider = new CachingCassandraSchemaProvider(
+                CONNECTOR_ID,
                 mockSession,
                 executor,
                 new Duration(5, TimeUnit.MINUTES),
@@ -74,14 +76,14 @@ public class TestCachingCassandraSchemaProvider
     {
         assertEquals(mockSession.getAccessCount(), 0);
         assertEquals(schemaProvider.getAllTables(TEST_SCHEMA), ImmutableList.of(TEST_TABLE));
-        assertEquals(mockSession.getAccessCount(), 1);
+        assertEquals(mockSession.getAccessCount(), 2);
         assertEquals(schemaProvider.getAllTables(TEST_SCHEMA), ImmutableList.of(TEST_TABLE));
-        assertEquals(mockSession.getAccessCount(), 1);
+        assertEquals(mockSession.getAccessCount(), 2);
 
         schemaProvider.flushCache();
 
         assertEquals(schemaProvider.getAllTables(TEST_SCHEMA), ImmutableList.of(TEST_TABLE));
-        assertEquals(mockSession.getAccessCount(), 2);
+        assertEquals(mockSession.getAccessCount(), 4);
     }
 
     @Test(expectedExceptions = SchemaNotFoundException.class)

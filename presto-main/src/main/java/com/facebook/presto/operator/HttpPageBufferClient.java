@@ -21,7 +21,7 @@ import com.google.common.net.MediaType;
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import io.airlift.http.client.AsyncHttpClient;
-import io.airlift.http.client.AsyncHttpClient.AsyncHttpResponseFuture;
+import io.airlift.http.client.HttpClient.HttpResponseFuture;
 import io.airlift.http.client.HttpStatus;
 import io.airlift.http.client.HttpUriBuilder;
 import io.airlift.http.client.Request;
@@ -51,6 +51,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.net.HttpHeaders.CONTENT_TYPE;
 import static io.airlift.http.client.Request.Builder.prepareDelete;
 import static io.airlift.http.client.Request.Builder.prepareGet;
+import static io.airlift.http.client.ResponseHandlerUtils.propagate;
 import static io.airlift.http.client.StatusResponseHandler.createStatusResponseHandler;
 
 @ThreadSafe
@@ -84,7 +85,7 @@ public class HttpPageBufferClient
     @GuardedBy("this")
     private boolean closed;
     @GuardedBy("this")
-    private AsyncHttpResponseFuture<PagesResponse> future;
+    private HttpResponseFuture<PagesResponse> future;
     @GuardedBy("this")
     private DateTime lastUpdate = DateTime.now();
     @GuardedBy("this")
@@ -289,7 +290,7 @@ public class HttpPageBufferClient
         @Override
         public PagesResponse handleException(Request request, Exception exception)
         {
-            throw Throwables.propagate(exception);
+            throw propagate(request, exception);
         }
 
         @Override

@@ -13,8 +13,8 @@
  */
 package com.facebook.presto.operator;
 
+import com.facebook.presto.ExceededMemoryLimitException;
 import com.facebook.presto.sql.analyzer.Session;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.base.Function;
 import com.google.common.base.Supplier;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -26,14 +26,12 @@ import javax.annotation.concurrent.ThreadSafe;
 
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadMXBean;
-import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Preconditions.checkState;
 import static io.airlift.units.DataSize.Unit.BYTE;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
@@ -199,8 +197,8 @@ public class OperatorContext
         long delta = newMemoryReservation - memoryReservation.get();
 
         // currently, operator memory is not be released
-        if (delta > 0) {
-            checkState(reserveMemory(delta), "Task exceeded max memory size of %s", getMaxMemorySize());
+        if (delta > 0 && !reserveMemory(delta)) {
+            throw new ExceededMemoryLimitException(getMaxMemorySize());
         }
 
         return newMemoryReservation;
@@ -230,12 +228,6 @@ public class OperatorContext
     public CounterStat getOutputPositions()
     {
         return outputPositions;
-    }
-
-    @Deprecated
-    public void addOutputItems(PlanNodeId id, Set<?> output)
-    {
-        driverContext.addOutputItems(id, output);
     }
 
     public OperatorStats getOperatorStats()

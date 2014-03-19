@@ -21,7 +21,6 @@ import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.LimitNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
-import com.facebook.presto.sql.planner.plan.MaterializedViewWriterNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.PlanVisitor;
@@ -35,6 +34,7 @@ import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
 import com.facebook.presto.sql.planner.plan.UnionNode;
+import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
 import com.google.common.collect.ImmutableSet;
 
@@ -193,6 +193,14 @@ public final class SymbolExtractor
         }
 
         @Override
+        public Void visitValues(ValuesNode node, Void context)
+        {
+            builder.addAll(node.getOutputSymbols());
+
+            return null;
+        }
+
+        @Override
         public Void visitTableWriter(TableWriterNode node, Void context)
         {
             node.getSource().accept(this, context);
@@ -204,16 +212,6 @@ public final class SymbolExtractor
 
         @Override
         public Void visitTableCommit(TableCommitNode node, Void context)
-        {
-            node.getSource().accept(this, context);
-
-            builder.addAll(node.getOutputSymbols());
-
-            return null;
-        }
-
-        @Override
-        public Void visitMaterializedViewWriter(MaterializedViewWriterNode node, Void context)
         {
             node.getSource().accept(this, context);
 

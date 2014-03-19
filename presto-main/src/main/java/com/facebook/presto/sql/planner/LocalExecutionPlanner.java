@@ -38,9 +38,11 @@ import com.facebook.presto.operator.MaterializeSampleOperator;
 import com.facebook.presto.operator.OperatorFactory;
 import com.facebook.presto.operator.OrderByOperator.OrderByOperatorFactory;
 import com.facebook.presto.operator.OutputFactory;
+import com.facebook.presto.operator.PageBuilder;
 import com.facebook.presto.operator.ProjectionFunction;
 import com.facebook.presto.operator.ProjectionFunctions;
 import com.facebook.presto.operator.RecordSinkManager;
+import com.facebook.presto.operator.SampleOperator.SampleOperatorFactory;
 import com.facebook.presto.operator.ScanFilterAndProjectOperator.ScanFilterAndProjectOperatorFactory;
 import com.facebook.presto.operator.SetBuilderOperator.SetBuilderOperatorFactory;
 import com.facebook.presto.operator.SetBuilderOperator.SetSupplier;
@@ -48,6 +50,7 @@ import com.facebook.presto.operator.SortOrder;
 import com.facebook.presto.operator.SourceOperatorFactory;
 import com.facebook.presto.operator.TableScanOperator.TableScanOperatorFactory;
 import com.facebook.presto.operator.TopNOperator.TopNOperatorFactory;
+import com.facebook.presto.operator.ValuesOperator.ValuesOperatorFactory;
 import com.facebook.presto.operator.WindowOperator.WindowOperatorFactory;
 import com.facebook.presto.operator.window.WindowFunction;
 import com.facebook.presto.spi.ColumnHandle;
@@ -64,7 +67,6 @@ import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.LimitNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
 import com.facebook.presto.sql.planner.plan.MaterializeSampleNode;
-import com.facebook.presto.sql.planner.plan.MaterializedViewWriterNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.PlanVisitor;
@@ -78,6 +80,7 @@ import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
 import com.facebook.presto.sql.planner.plan.UnionNode;
+import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
 import com.facebook.presto.sql.tree.BooleanLiteral;
 import com.facebook.presto.sql.tree.Expression;
@@ -120,7 +123,6 @@ import java.util.List;
 import java.util.Map;
 
 import static com.facebook.presto.operator.DistinctLimitOperator.DistinctLimitOperatorFactory;
-import static com.facebook.presto.operator.MaterializedViewWriterOperator.MaterializedViewWriterOperatorFactory;
 import static com.facebook.presto.operator.TableCommitOperator.TableCommitOperatorFactory;
 import static com.facebook.presto.operator.TableCommitOperator.TableCommitter;
 import static com.facebook.presto.operator.TableWriterOperator.TableWriterOperatorFactory;
@@ -128,6 +130,7 @@ import static com.facebook.presto.sql.planner.plan.JoinNode.EquiJoinClause.leftG
 import static com.facebook.presto.sql.planner.plan.JoinNode.EquiJoinClause.rightGetter;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
 
 public class LocalExecutionPlanner
 {
@@ -515,6 +518,15 @@ public class LocalExecutionPlanner
             if (node.getSampleType() == SampleNode.Type.SYSTEM) {
                 return node.getSource().accept(this, context);
             }
+
+            if (node.getSampleType() == SampleNode.Type.POISSONIZED) {
+                PhysicalOperation source = node.getSource().accept(this, context);
+                OperatorFactory operatorFactory = new SampleOperatorFactory(context.getNextOperatorId(), node.getSampleRatio(), node.isRescaled(), source.getTupleInfos());
+                checkState(node.getSampleWeightSymbol().isPresent(), "sample weight symbol missing");
+                Map<Symbol, Input> layout = ImmutableMap.<Symbol, Input>builder().putAll(source.getLayout()).put(node.getSampleWeightSymbol().get(), new Input(source.getTupleInfos().size())).build();
+                return new PhysicalOperation(operatorFactory, layout, source);
+            }
+
             throw new UnsupportedOperationException("not yet implemented: " + node);
         }
 
@@ -740,6 +752,36 @@ public class LocalExecutionPlanner
         }
 
         @Override
+        public PhysicalOperation visitValues(ValuesNode node, LocalExecutionPlanContext context)
+        {
+            Map<Symbol, Input> outputMappings = new LinkedHashMap<>();
+            List<TupleInfo> outputTypes = new ArrayList<>();
+
+            int channel = 0;
+            for (Symbol symbol : node.getOutputSymbols()) {
+                Input input = new Input(channel);
+                outputMappings.put(symbol, input);
+
+                Type type = checkNotNull(context.getTypes().get(symbol), "No type for symbol %s", symbol);
+                outputTypes.add(new TupleInfo(type.getRawType()));
+
+                channel++;
+            }
+
+            PageBuilder pageBuilder = new PageBuilder(outputTypes);
+            for (List<Expression> row : node.getRows()) {
+                for (int i = 0; i < row.size(); i++) {
+                    // evaluate the literal value
+                    Object result = ExpressionInterpreter.expressionInterpreter(row.get(i), metadata, context.getSession()).evaluate(new TupleReadable[0]);
+                    pageBuilder.getBlockBuilder(i).appendObject(result);
+                }
+            }
+
+            OperatorFactory operatorFactory = new ValuesOperatorFactory(context.getNextOperatorId(), ImmutableList.of(pageBuilder.build()));
+            return new PhysicalOperation(operatorFactory, outputMappings);
+        }
+
+        @Override
         public PhysicalOperation visitJoin(JoinNode node, LocalExecutionPlanContext context)
         {
             List<JoinNode.EquiJoinClause> clauses = node.getCriteria();
@@ -951,34 +993,6 @@ public class LocalExecutionPlanner
             Map<Symbol, Input> layout = ImmutableMap.of(node.getOutputSymbols().get(0), new Input(0));
 
             return new PhysicalOperation(operatorFactory, layout, source);
-        }
-
-        @Override
-        public PhysicalOperation visitMaterializedViewWriter(MaterializedViewWriterNode node, LocalExecutionPlanContext context)
-        {
-            PhysicalOperation query = node.getSource().accept(this, context);
-
-            ImmutableList.Builder<ColumnHandle> columns = ImmutableList.builder();
-            ImmutableList.Builder<Symbol> symbols = ImmutableList.builder();
-            for (Map.Entry<Symbol, ColumnHandle> entry : node.getColumns().entrySet()) {
-                symbols.add(entry.getKey());
-                columns.add(entry.getValue());
-            }
-
-            // introduce a projection to match the expected output
-            IdentityProjectionInfo mappings = computeIdentityMapping(symbols.build(), query.getLayout(), context.getTypes());
-            OperatorFactory sourceOperator = new FilterAndProjectOperatorFactory(context.getNextOperatorId(), FilterFunctions.TRUE_FUNCTION, mappings.getProjections());
-            PhysicalOperation source = new PhysicalOperation(sourceOperator, mappings.getOutputLayout(), query);
-
-            Symbol outputSymbol = Iterables.getOnlyElement(node.getOutputSymbols());
-            MaterializedViewWriterOperatorFactory operator = new MaterializedViewWriterOperatorFactory(
-                    context.getNextOperatorId(),
-                    node.getId(),
-                    storageManager,
-                    nodeInfo.getNodeId(),
-                    columns.build());
-
-            return new PhysicalOperation(operator, ImmutableMap.of(outputSymbol, new Input(0)), source);
         }
 
         @Override

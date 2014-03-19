@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.operator;
 
+import com.facebook.presto.ExceededMemoryLimitException;
 import com.facebook.presto.execution.TaskId;
 import com.facebook.presto.operator.HashBuilderOperator.HashBuilderOperatorFactory;
 import com.facebook.presto.operator.HashJoinOperator.HashJoinOperatorFactory;
@@ -38,6 +39,7 @@ import static com.facebook.presto.util.Threads.daemonThreadsNamed;
 import static io.airlift.units.DataSize.Unit.BYTE;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 
+@Test(singleThreaded = true)
 public class TestHashJoinOperator
 {
     private ExecutorService executor;
@@ -64,8 +66,8 @@ public class TestHashJoinOperator
         DriverContext driverContext = taskContext.addPipelineContext(true, true).addDriverContext();
 
         // build
-        OperatorContext operatorContext = driverContext.addOperatorContext(0, StaticOperator.class.getSimpleName());
-        Operator buildOperator = new StaticOperator(operatorContext, rowPagesBuilder(SINGLE_VARBINARY, SINGLE_LONG, SINGLE_LONG)
+        OperatorContext operatorContext = driverContext.addOperatorContext(0, ValuesOperator.class.getSimpleName());
+        Operator buildOperator = new ValuesOperator(operatorContext, rowPagesBuilder(SINGLE_VARBINARY, SINGLE_LONG, SINGLE_LONG)
                 .addSequencePage(10, 20, 30, 40)
                 .build());
         HashBuilderOperatorFactory hashBuilderOperatorFactory = new HashBuilderOperatorFactory(1, buildOperator.getTupleInfos(), Ints.asList(0), 100);
@@ -117,8 +119,8 @@ public class TestHashJoinOperator
         DriverContext driverContext = taskContext.addPipelineContext(true, true).addDriverContext();
 
         // build
-        OperatorContext operatorContext = driverContext.addOperatorContext(0, StaticOperator.class.getSimpleName());
-        Operator buildOperator = new StaticOperator(operatorContext, rowPagesBuilder(SINGLE_VARBINARY)
+        OperatorContext operatorContext = driverContext.addOperatorContext(0, ValuesOperator.class.getSimpleName());
+        Operator buildOperator = new ValuesOperator(operatorContext, rowPagesBuilder(SINGLE_VARBINARY)
                 .row("a")
                 .row("b")
                 .row("c")
@@ -163,8 +165,8 @@ public class TestHashJoinOperator
         DriverContext driverContext = taskContext.addPipelineContext(true, true).addDriverContext();
 
         // build
-        OperatorContext operatorContext = driverContext.addOperatorContext(0, StaticOperator.class.getSimpleName());
-        Operator buildOperator = new StaticOperator(operatorContext, rowPagesBuilder(SINGLE_VARBINARY)
+        OperatorContext operatorContext = driverContext.addOperatorContext(0, ValuesOperator.class.getSimpleName());
+        Operator buildOperator = new ValuesOperator(operatorContext, rowPagesBuilder(SINGLE_VARBINARY)
                 .row("a")
                 .row((String) null)
                 .row((String) null)
@@ -209,8 +211,8 @@ public class TestHashJoinOperator
         DriverContext driverContext = taskContext.addPipelineContext(true, true).addDriverContext();
 
         // build
-        OperatorContext operatorContext = driverContext.addOperatorContext(0, StaticOperator.class.getSimpleName());
-        Operator buildOperator = new StaticOperator(operatorContext, rowPagesBuilder(SINGLE_VARBINARY)
+        OperatorContext operatorContext = driverContext.addOperatorContext(0, ValuesOperator.class.getSimpleName());
+        Operator buildOperator = new ValuesOperator(operatorContext, rowPagesBuilder(SINGLE_VARBINARY)
                 .row("a")
                 .row((String) null)
                 .row((String) null)
@@ -256,8 +258,8 @@ public class TestHashJoinOperator
         DriverContext driverContext = taskContext.addPipelineContext(true, true).addDriverContext();
 
         // build
-        OperatorContext operatorContext = driverContext.addOperatorContext(0, StaticOperator.class.getSimpleName());
-        Operator buildOperator = new StaticOperator(operatorContext, rowPagesBuilder(SINGLE_VARBINARY, SINGLE_LONG, SINGLE_LONG)
+        OperatorContext operatorContext = driverContext.addOperatorContext(0, ValuesOperator.class.getSimpleName());
+        Operator buildOperator = new ValuesOperator(operatorContext, rowPagesBuilder(SINGLE_VARBINARY, SINGLE_LONG, SINGLE_LONG)
                 .addSequencePage(10, 20, 30, 40)
                 .build());
 
@@ -315,8 +317,8 @@ public class TestHashJoinOperator
         DriverContext driverContext = taskContext.addPipelineContext(true, true).addDriverContext();
 
         // build
-        OperatorContext operatorContext = driverContext.addOperatorContext(0, StaticOperator.class.getSimpleName());
-        Operator buildOperator = new StaticOperator(operatorContext, rowPagesBuilder(SINGLE_VARBINARY)
+        OperatorContext operatorContext = driverContext.addOperatorContext(0, ValuesOperator.class.getSimpleName());
+        Operator buildOperator = new ValuesOperator(operatorContext, rowPagesBuilder(SINGLE_VARBINARY)
                 .row("a")
                 .row("b")
                 .row("c")
@@ -363,8 +365,8 @@ public class TestHashJoinOperator
         DriverContext driverContext = taskContext.addPipelineContext(true, true).addDriverContext();
 
         // build
-        OperatorContext operatorContext = driverContext.addOperatorContext(0, StaticOperator.class.getSimpleName());
-        Operator buildOperator = new StaticOperator(operatorContext, rowPagesBuilder(SINGLE_VARBINARY)
+        OperatorContext operatorContext = driverContext.addOperatorContext(0, ValuesOperator.class.getSimpleName());
+        Operator buildOperator = new ValuesOperator(operatorContext, rowPagesBuilder(SINGLE_VARBINARY)
                 .row("a")
                 .row((String) null)
                 .row((String) null)
@@ -410,8 +412,8 @@ public class TestHashJoinOperator
         DriverContext driverContext = taskContext.addPipelineContext(true, true).addDriverContext();
 
         // build
-        OperatorContext operatorContext = driverContext.addOperatorContext(0, StaticOperator.class.getSimpleName());
-        Operator buildOperator = new StaticOperator(operatorContext, rowPagesBuilder(SINGLE_VARBINARY)
+        OperatorContext operatorContext = driverContext.addOperatorContext(0, ValuesOperator.class.getSimpleName());
+        Operator buildOperator = new ValuesOperator(operatorContext, rowPagesBuilder(SINGLE_VARBINARY)
                 .row("a")
                 .row((String) null)
                 .row((String) null)
@@ -452,7 +454,7 @@ public class TestHashJoinOperator
         assertOperatorEquals(joinOperator, probeInput, expected);
     }
 
-    @Test(expectedExceptions = IllegalStateException.class, expectedExceptionsMessageRegExp = "Task exceeded max memory size.*")
+    @Test(expectedExceptions = ExceededMemoryLimitException.class, expectedExceptionsMessageRegExp = "Task exceeded max memory size.*")
     public void testMemoryLimit()
             throws Exception
     {
@@ -461,8 +463,8 @@ public class TestHashJoinOperator
                 .addPipelineContext(true, true)
                 .addDriverContext();
 
-        OperatorContext operatorContext = driverContext.addOperatorContext(0, StaticOperator.class.getSimpleName());
-        Operator buildOperator = new StaticOperator(operatorContext, rowPagesBuilder(SINGLE_VARBINARY, SINGLE_LONG, SINGLE_LONG)
+        OperatorContext operatorContext = driverContext.addOperatorContext(0, ValuesOperator.class.getSimpleName());
+        Operator buildOperator = new ValuesOperator(operatorContext, rowPagesBuilder(SINGLE_VARBINARY, SINGLE_LONG, SINGLE_LONG)
                 .addSequencePage(10, 20, 30, 40)
                 .build());
 

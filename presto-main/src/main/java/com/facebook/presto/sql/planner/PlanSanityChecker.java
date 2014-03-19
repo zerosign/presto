@@ -21,7 +21,6 @@ import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.LimitNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
-import com.facebook.presto.sql.planner.plan.MaterializedViewWriterNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
@@ -36,6 +35,7 @@ import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
 import com.facebook.presto.sql.planner.plan.UnionNode;
+import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.FunctionCall;
@@ -294,6 +294,16 @@ public final class PlanSanityChecker
         }
 
         @Override
+        public Void visitValues(ValuesNode node, Void context)
+        {
+            verifyUniqueId(node);
+
+            Preconditions.checkArgument(node.getOutputSymbols().containsAll(node.getOutputSymbols()), "Assignments must contain mappings for output symbols");
+
+            return null;
+        }
+
+        @Override
         public Void visitExchange(ExchangeNode node, Void context)
         {
             verifyUniqueId(node);
@@ -332,17 +342,6 @@ public final class PlanSanityChecker
         {
             PlanNode source = node.getSource();
             Preconditions.checkArgument(source instanceof TableWriterNode, "Invalid node. TableCommit source must be a TableWriter not %s", source.getClass().getSimpleName());
-            source.accept(this, context); // visit child
-
-            verifyUniqueId(node);
-
-            return null;
-        }
-
-        @Override
-        public Void visitMaterializedViewWriter(MaterializedViewWriterNode node, Void context)
-        {
-            PlanNode source = node.getSource();
             source.accept(this, context); // visit child
 
             verifyUniqueId(node);

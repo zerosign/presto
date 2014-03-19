@@ -24,7 +24,6 @@ import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.LimitNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
-import com.facebook.presto.sql.planner.plan.MaterializedViewWriterNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
 import com.facebook.presto.sql.planner.plan.PlanFragmentId;
 import com.facebook.presto.sql.planner.plan.PlanNode;
@@ -36,6 +35,7 @@ import com.facebook.presto.sql.planner.plan.SortNode;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
 import com.facebook.presto.sql.planner.plan.UnionNode;
+import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
 import com.facebook.presto.sql.tree.ComparisonExpression;
 import com.facebook.presto.sql.tree.Expression;
@@ -69,7 +69,7 @@ public final class GraphvizPrinter
         OUTPUT,
         LIMIT,
         TABLESCAN,
-        MATERIALIZED_VIEW_WRITER,
+        VALUES,
         JOIN,
         SINK,
         WINDOW,
@@ -88,7 +88,7 @@ public final class GraphvizPrinter
             .put(NodeType.OUTPUT, "white")
             .put(NodeType.LIMIT, "gray83")
             .put(NodeType.TABLESCAN, "deepskyblue")
-            .put(NodeType.MATERIALIZED_VIEW_WRITER, "lightslateblue")
+            .put(NodeType.VALUES, "deepskyblue")
             .put(NodeType.JOIN, "orange")
             .put(NodeType.SORT, "aliceblue")
             .put(NodeType.SINK, "indianred1")
@@ -218,13 +218,6 @@ public final class GraphvizPrinter
         }
 
         @Override
-        public Void visitMaterializedViewWriter(MaterializedViewWriterNode node, Void context)
-        {
-            printNode(node, format("MaterializedViewWriter[%s]", node.getTable()), format("output = %s", node.getOutput()), NODE_COLORS.get(NodeType.MATERIALIZED_VIEW_WRITER));
-            return node.getSource().accept(this, context);
-        }
-
-        @Override
         public Void visitSink(SinkNode node, Void context)
         {
             printNode(node, "Sink", NODE_COLORS.get(NodeType.SINK));
@@ -339,6 +332,13 @@ public final class GraphvizPrinter
         public Void visitTableScan(TableScanNode node, Void context)
         {
             printNode(node, format("TableScan[%s]", node.getTable()), format("original constraint=%s", node.getOriginalConstraint()), NODE_COLORS.get(NodeType.TABLESCAN));
+            return null;
+        }
+
+        @Override
+        public Void visitValues(ValuesNode node, Void context)
+        {
+            printNode(node, "Values", NODE_COLORS.get(NodeType.TABLESCAN));
             return null;
         }
 

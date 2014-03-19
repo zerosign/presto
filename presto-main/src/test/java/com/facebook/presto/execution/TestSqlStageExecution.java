@@ -36,7 +36,6 @@ import com.facebook.presto.spi.SplitSource;
 import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.sql.analyzer.Session;
 import com.facebook.presto.sql.analyzer.Type;
-import com.facebook.presto.sql.planner.OutputReceiver;
 import com.facebook.presto.sql.planner.PlanFragment;
 import com.facebook.presto.sql.planner.PlanFragment.OutputPartitioning;
 import com.facebook.presto.sql.planner.PlanFragment.PlanDistribution;
@@ -86,6 +85,7 @@ import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.fail;
 
+@Test(singleThreaded = true)
 public class TestSqlStageExecution
 {
     public static final Session SESSION = new Session("user", "source", "catalog", "schema", "address", "agent");
@@ -303,8 +303,8 @@ public class TestSqlStageExecution
 
         return new StageExecutionPlan(joinPlan,
                 probe.getDataSource(),
-                ImmutableList.of(probe, build),
-                ImmutableMap.<PlanNodeId, OutputReceiver>of());
+                ImmutableList.of(probe, build)
+        );
     }
 
     private StageExecutionPlan createTableScanPlan(String planId, MetadataManager metadata, int splitCount)
@@ -339,8 +339,8 @@ public class TestSqlStageExecution
 
         return new StageExecutionPlan(testFragment,
                 Optional.of(splitSource),
-                ImmutableList.<StageExecutionPlan>of(),
-                ImmutableMap.<PlanNodeId, OutputReceiver>of());
+                ImmutableList.<StageExecutionPlan>of()
+        );
     }
 
     private static class MockRemoteTaskFactory
@@ -360,7 +360,6 @@ public class TestSqlStageExecution
                 Node node,
                 PlanFragment fragment,
                 Multimap<PlanNodeId, Split> initialSplits,
-                Map<PlanNodeId, OutputReceiver> outputReceivers,
                 OutputBuffers outputBuffers)
         {
             return new MockRemoteTask(taskId, fragment, executor, initialSplits);
@@ -425,8 +424,7 @@ public class TestSqlStageExecution
                         sharedBuffer.getInfo(),
                         ImmutableSet.<PlanNodeId>of(),
                         taskContext.getTaskStats(),
-                        failures,
-                        taskContext.getOutputItems());
+                        failures);
             }
 
             @Override

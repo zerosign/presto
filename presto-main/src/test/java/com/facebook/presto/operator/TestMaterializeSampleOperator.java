@@ -32,6 +32,7 @@ import static com.facebook.presto.util.MaterializedResult.resultBuilder;
 import static com.facebook.presto.util.Threads.daemonThreadsNamed;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 
+@Test(singleThreaded = true)
 public class TestMaterializeSampleOperator
 {
     private ExecutorService executor;
@@ -51,6 +52,24 @@ public class TestMaterializeSampleOperator
     public void tearDown()
     {
         executor.shutdownNow();
+    }
+
+    @Test
+    public void testZeroSampleWeight()
+            throws Exception
+    {
+        List<Page> input = rowPagesBuilder(SINGLE_LONG)
+                .addSequencePage(100, 1)
+                .build();
+        input = appendSampleWeight(input, 0);
+
+        OperatorFactory operatorFactory = new MaterializeSampleOperatorFactory(0, ImmutableList.of(SINGLE_LONG), 1);
+        Operator operator = operatorFactory.createOperator(driverContext);
+
+        MaterializedResult expected = resultBuilder(SINGLE_LONG)
+                .build();
+
+        OperatorAssertion.assertOperatorEqualsIgnoreOrder(operator, input, expected);
     }
 
     @Test

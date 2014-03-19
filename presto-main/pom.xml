@@ -5,7 +5,7 @@
     <parent>
         <groupId>com.facebook.presto</groupId>
         <artifactId>presto-root</artifactId>
-        <version>0.60</version>
+        <version>0.61</version>
     </parent>
 
     <artifactId>presto-main</artifactId>
@@ -32,8 +32,8 @@
         </dependency>
 
         <dependency>
-            <groupId>commons-math</groupId>
-            <artifactId>commons-math</artifactId>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-math3</artifactId>
         </dependency>
 
         <dependency>
@@ -276,6 +276,12 @@
             <groupId>com.facebook.presto</groupId>
             <artifactId>presto-parser</artifactId>
             <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>com.sun.jersey</groupId>
+            <artifactId>jersey-core</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

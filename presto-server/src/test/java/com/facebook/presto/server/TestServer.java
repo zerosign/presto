@@ -14,9 +14,9 @@
 package com.facebook.presto.server;
 
 import com.facebook.presto.server.testing.TestingPrestoServer;
-import io.airlift.http.client.ApacheHttpClient;
 import io.airlift.http.client.HttpClient;
 import io.airlift.http.client.StatusResponseHandler;
+import io.airlift.http.client.jetty.JettyHttpClient;
 import io.airlift.testing.Closeables;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
@@ -27,6 +27,7 @@ import static io.airlift.http.client.StatusResponseHandler.createStatusResponseH
 import static javax.ws.rs.core.Response.Status.OK;
 import static org.testng.Assert.assertEquals;
 
+@Test(singleThreaded = true)
 public class TestServer
 {
     private TestingPrestoServer server;
@@ -37,7 +38,7 @@ public class TestServer
             throws Exception
     {
         server = new TestingPrestoServer();
-        client = new ApacheHttpClient();
+        client = new JettyHttpClient();
     }
 
     @SuppressWarnings("deprecation")

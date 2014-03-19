@@ -39,7 +39,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.http.client.AsyncHttpClient;
 import io.airlift.http.client.HttpClientConfig;
-import io.airlift.http.client.netty.StandaloneNettyAsyncHttpClient;
+import io.airlift.http.client.jetty.JettyHttpClient;
 import io.airlift.json.JsonCodec;
 import io.airlift.log.Logger;
 import io.airlift.testing.Closeables;
@@ -200,25 +200,6 @@ public class TestDistributedQueries
         }
     }
 
-    @Test
-    public void testCreateMaterializedView()
-            throws Exception
-    {
-        // materialized view doesn't seem to work with native tables
-        assertQuery(
-                "CREATE MATERIALIZED VIEW test_mview_orders AS SELECT * FROM tpch.tiny.orders",
-                "SELECT count(*) FROM orders");
-
-        // Materialized views have a race condition between writing data to the
-        // native store and when the data is visible to be queried. This is a
-        // brain dead work around for this race condition that doesn't really
-        // fix the problem, but makes it very unlikely.
-        // TODO: remove this when the materialized view flow is fixed
-        MILLISECONDS.sleep(500);
-
-        assertQuery("SELECT * FROM test_mview_orders", "SELECT * FROM orders");
-    }
-
     @Override
     protected int getNodeCount()
     {
@@ -243,7 +224,7 @@ public class TestDistributedQueries
             throw e;
         }
 
-        this.httpClient = new StandaloneNettyAsyncHttpClient("test",
+        this.httpClient = new JettyHttpClient(
                 new HttpClientConfig()
                         .setConnectTimeout(new Duration(1, TimeUnit.DAYS))
                         .setReadTimeout(new Duration(10, TimeUnit.DAYS)));

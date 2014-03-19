@@ -66,10 +66,6 @@ statement returns [Statement value]
     | showFunctions             { $value = $showFunctions.value; }
     | useCollection             { $value = $useCollection.value; }
     | createTable               { $value = $createTable.value; }
-    | createMaterializedView    { $value = $createMaterializedView.value; }
-    | refreshMaterializedView   { $value = $refreshMaterializedView.value; }
-    | createAlias               { $value = $createAlias.value; }
-    | dropAlias                 { $value = $dropAlias.value; }
     | dropTable                 { $value = $dropTable.value; }
     ;
 
@@ -97,6 +93,7 @@ queryBody returns [QueryBody value]
     | setOperation          { $value = $setOperation.value; }
     | tableSubquery         { $value = $tableSubquery.value; }
     | namedTable            { $value = $namedTable.value; }
+    | tableValue            { $value = $tableValue.value; }
     ;
 
 querySpec returns [QuerySpecification value]
@@ -228,6 +225,12 @@ limitClause returns [String value]
 sampleType returns [SampledRelation.Type value]
     : BERNOULLI { $value = SampledRelation.Type.BERNOULLI; }
     | SYSTEM    { $value = SampledRelation.Type.SYSTEM; }
+    | POISSONIZED    { $value = SampledRelation.Type.POISSONIZED; }
+    ;
+
+rescaled returns [boolean value]
+    : RESCALED  { $value = true; }
+    |           { $value = false; }
     ;
 
 stratifyOn returns [List<Expression> value]
@@ -269,7 +272,7 @@ aliasedRelation returns [AliasedRelation value]
     ;
 
 sampledRelation returns [SampledRelation value]
-    : ^(SAMPLED_RELATION r=relation t=sampleType p=expr st=stratifyOn?) { $value = new SampledRelation($r.value, $t.value, $p.value, Optional.fromNullable($st.value)); }
+    : ^(SAMPLED_RELATION r=relation t=sampleType p=expr s=rescaled st=stratifyOn?) { $value = new SampledRelation($r.value, $t.value, $p.value, $s.value, Optional.fromNullable($st.value)); }
     ;
 
 aliasedColumns returns [List<String> value]
@@ -291,6 +294,18 @@ joinCriteria returns [JoinCriteria value]
 
 tableSubquery returns [TableSubquery value]
     : ^(TABLE_SUBQUERY query) { $value = new TableSubquery($query.value); }
+    ;
+
+tableValue returns [Values value]
+    :  ^(TABLE_VALUE rowList) { $value = new Values($rowList.value); }
+    ;
+
+rowList returns [List<Row> value = new ArrayList<>()]
+    :  ( rowValue { $value.add($rowValue.value); } )+
+    ;
+
+rowValue returns [Row value]
+    : ^(ROW_VALUE exprList) { $value = new Row($exprList.value); }
     ;
 
 singleExpression returns [Expression value]
@@ -534,31 +549,6 @@ useCollection returns [Statement value]
 
 createTable returns [Statement value]
     : ^(CREATE_TABLE qname query) { $value = new CreateTable($qname.value, $query.value); }
-    ;
-
-createMaterializedView returns [Statement value]
-    : ^(CREATE_MATERIALIZED_VIEW qname refresh=viewRefresh? select=restrictedSelectStmt)
-        { $value = new CreateMaterializedView($qname.value, Optional.fromNullable($refresh.value), $select.value); }
-    ;
-
-refreshMaterializedView returns [Statement value]
-    : ^(REFRESH_MATERIALIZED_VIEW qname) { $value = new RefreshMaterializedView($qname.value); }
-    ;
-
-viewRefresh returns [String value]
-    : ^(REFRESH integer) { $value = $integer.value; }
-    ;
-
-createAlias returns [Statement value]
-    : ^(CREATE_ALIAS qname remote=forRemote) { $value = new CreateAlias($qname.value, $remote.value); }
-    ;
-
-dropAlias returns [Statement value]
-    : ^(DROP_ALIAS qname) { $value = new DropAlias($qname.value); }
-    ;
-
-forRemote returns [QualifiedName value]
-    : ^(FOR qname) { $value = $qname.value; }
     ;
 
 dropTable returns [Statement value]

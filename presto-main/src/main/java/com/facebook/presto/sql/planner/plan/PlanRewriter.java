@@ -199,7 +199,7 @@ public final class PlanRewriter<C>
             PlanNode source = rewrite(node.getSource(), context.get());
 
             if (source != node.getSource()) {
-                return new SampleNode(node.getId(), source, node.getSampleRatio(), node.getSampleType());
+                return new SampleNode(node.getId(), source, node.getSampleRatio(), node.getSampleType(), node.isRescaled(), node.getSampleWeightSymbol());
             }
 
             return node;
@@ -314,6 +314,19 @@ public final class PlanRewriter<C>
         }
 
         @Override
+        public PlanNode visitValues(ValuesNode node, Context<C> context)
+        {
+            if (!context.isDefaultRewrite()) {
+                PlanNode result = nodeRewriter.rewriteValues(node, context.get(), PlanRewriter.this);
+                if (result != null) {
+                    return result;
+                }
+            }
+
+            return node;
+        }
+
+        @Override
         public PlanNode visitTableWriter(TableWriterNode node, Context<C> context)
         {
             if (!context.isDefaultRewrite()) {
@@ -346,29 +359,6 @@ public final class PlanRewriter<C>
 
             if (source != node.getSource()) {
                 return new TableCommitNode(node.getId(), source, node.getTarget(), node.getOutputSymbols());
-            }
-
-            return node;
-        }
-
-        @Override
-        public PlanNode visitMaterializedViewWriter(MaterializedViewWriterNode node, Context<C> context)
-        {
-            if (!context.isDefaultRewrite()) {
-                PlanNode result = nodeRewriter.rewriteMaterializedViewWriter(node, context.get(), PlanRewriter.this);
-                if (result != null) {
-                    return result;
-                }
-            }
-
-            PlanNode source = rewrite(node.getSource(), context.get());
-
-            if (source != node.getSource()) {
-                return new MaterializedViewWriterNode(node.getId(),
-                        source,
-                        node.getTable(),
-                        node.getColumns(),
-                        node.getOutput());
             }
 
             return node;

@@ -30,6 +30,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
         @JsonSubTypes.Type(value = OutputNode.class, name = "output"),
         @JsonSubTypes.Type(value = ProjectNode.class, name = "project"),
         @JsonSubTypes.Type(value = TableScanNode.class, name = "tablescan"),
+        @JsonSubTypes.Type(value = ValuesNode.class, name = "values"),
         @JsonSubTypes.Type(value = AggregationNode.class, name = "aggregation"),
         @JsonSubTypes.Type(value = MarkDistinctNode.class, name = "markDistinct"),
         @JsonSubTypes.Type(value = MaterializeSampleNode.class, name = "materializeSample"),
@@ -46,7 +47,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
         @JsonSubTypes.Type(value = SemiJoinNode.class, name = "semijoin"),
         @JsonSubTypes.Type(value = TableWriterNode.class, name = "tablewriter"),
         @JsonSubTypes.Type(value = TableCommitNode.class, name = "tablecommit"),
-        @JsonSubTypes.Type(value = MaterializedViewWriterNode.class, name = "materializedViewWriter")})
+})
 public abstract class PlanNode
 {
     private final PlanNodeId id;

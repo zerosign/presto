@@ -29,9 +29,9 @@ import com.facebook.presto.execution.TaskInfo;
 import com.facebook.presto.execution.TaskState;
 import com.facebook.presto.operator.TaskContext;
 import com.facebook.presto.operator.TaskStats;
+import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.Split;
 import com.facebook.presto.sql.analyzer.Session;
-import com.facebook.presto.sql.planner.OutputReceiver;
 import com.facebook.presto.sql.planner.PlanFragment;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.tuple.TupleInfo;
@@ -41,7 +41,6 @@ import com.google.common.base.Objects;
 import com.google.common.base.Predicate;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.SetMultimap;
@@ -63,12 +62,12 @@ import org.joda.time.DateTime;
 
 import javax.annotation.concurrent.GuardedBy;
 
+import java.io.EOFException;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Queue;
 import java.util.Set;
@@ -82,6 +81,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static com.facebook.presto.spi.StandardErrorCode.TOO_MANY_REQUESTS_FAILED;
 import static com.facebook.presto.util.Failures.toFailure;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
@@ -93,6 +93,7 @@ import static io.airlift.http.client.Request.Builder.prepareDelete;
 import static io.airlift.http.client.Request.Builder.prepareGet;
 import static io.airlift.http.client.Request.Builder.preparePost;
 import static io.airlift.http.client.StatusResponseHandler.createStatusResponseHandler;
+import static java.lang.String.format;
 
 public class HttpRemoteTask
         implements RemoteTask
@@ -131,7 +132,6 @@ public class HttpRemoteTask
     private final JsonCodec<TaskInfo> taskInfoCodec;
     private final JsonCodec<TaskUpdateRequest> taskUpdateRequestCodec;
     private final List<TupleInfo> tupleInfos;
-    private final Map<PlanNodeId, OutputReceiver> outputReceivers;
 
     private final RateLimiter errorRequestRateLimiter = RateLimiter.create(0.1);
 
@@ -147,7 +147,6 @@ public class HttpRemoteTask
             URI location,
             PlanFragment planFragment,
             Multimap<PlanNodeId, Split> initialSplits,
-            Map<PlanNodeId, OutputReceiver> outputReceivers,
             OutputBuffers outputBuffers,
             AsyncHttpClient httpClient,
             Executor executor,
@@ -161,7 +160,6 @@ public class HttpRemoteTask
         checkNotNull(nodeId, "nodeId is null");
         checkNotNull(location, "location is null");
         checkNotNull(planFragment, "planFragment1 is null");
-        checkNotNull(outputReceivers, "outputReceivers is null");
         checkNotNull(outputBuffers, "outputBuffers is null");
         checkNotNull(httpClient, "httpClient is null");
         checkNotNull(executor, "executor is null");
@@ -173,7 +171,6 @@ public class HttpRemoteTask
             this.session = session;
             this.nodeId = nodeId;
             this.planFragment = planFragment;
-            this.outputReceivers = ImmutableMap.copyOf(outputReceivers);
             this.outputBuffers.set(outputBuffers);
             this.httpClient = httpClient;
             this.executor = executor;
@@ -208,8 +205,7 @@ public class HttpRemoteTask
                     new SharedBufferInfo(QueueState.OPEN, 0, 0, bufferStates),
                     ImmutableSet.<PlanNodeId>of(),
                     taskStats,
-                    ImmutableList.<FailureInfo>of(),
-                    ImmutableMap.<PlanNodeId, Set<?>>of()));
+                    ImmutableList.<FailureInfo>of()));
         }
     }
 
@@ -316,14 +312,6 @@ public class HttpRemoteTask
 
     private synchronized void updateTaskInfo(final TaskInfo newValue)
     {
-        for (Entry<PlanNodeId, Set<?>> entry : newValue.getOutputs().entrySet()) {
-            OutputReceiver outputReceiver = outputReceivers.get(entry.getKey());
-            checkState(outputReceiver != null, "Got Result for node %s which is not an output receiver!", entry.getKey());
-            for (Object result : entry.getValue()) {
-                outputReceiver.updateOutput(result);
-            }
-        }
-
         if (newValue.getState().isDone()) {
             // splits can be huge so clear the list
             pendingSplits.clear();
@@ -430,8 +418,7 @@ public class HttpRemoteTask
                     taskInfo.getOutputBuffers(),
                     taskInfo.getNoMoreSplits(),
                     taskInfo.getStats(),
-                    ImmutableList.<FailureInfo>of(),
-                    ImmutableMap.<PlanNodeId, Set<?>>of()));
+                    ImmutableList.<FailureInfo>of()));
 
             // fire delete to task and ignore response
             if (taskInfo.getSelf() != null) {
@@ -496,8 +483,13 @@ public class HttpRemoteTask
             return;
         }
 
-        // log failure message
+        // if task is done, ignore the error
         TaskInfo taskInfo = getTaskInfo();
+        if (taskInfo.getState().isDone()) {
+            return;
+        }
+
+        // log failure message
         if (isSocketError(reason)) {
             // don't print a stack for a socket error
             log.warn("Error updating task %s: %s: %s", taskInfo.getTaskId(), reason.getMessage(), taskInfo.getSelf());
@@ -516,7 +508,7 @@ public class HttpRemoteTask
         Duration timeSinceLastSuccess = Duration.nanosSince(lastSuccessfulRequest.get());
         if (errorCount > maxConsecutiveErrorCount && timeSinceLastSuccess.compareTo(minErrorDuration) > 0) {
             // it is weird to mark the task failed locally and then cancel the remote task, but there is no way to tell a remote task that it is failed
-            RuntimeException exception = new RuntimeException(String.format("Too many requests to %s failed: %s failures: Time since last success %s",
+            PrestoException exception = new PrestoException(TOO_MANY_REQUESTS_FAILED, format("Too many requests to %s failed: %s failures: Time since last success %s",
                     taskInfo.getSelf(),
                     errorCount,
                     timeSinceLastSuccess));
@@ -545,8 +537,7 @@ public class HttpRemoteTask
                 taskInfo.getOutputBuffers(),
                 taskInfo.getNoMoreSplits(),
                 taskInfo.getStats(),
-                ImmutableList.of(toFailure(cause)),
-                taskInfo.getOutputs()));
+                ImmutableList.of(toFailure(cause))));
     }
 
     @Override
@@ -695,6 +686,8 @@ public class HttpRemoteTask
                     requestFailed(cause);
                 }
                 finally {
+                    // there is no back off here so we can get a lot of error messages when a server spins
+                    // down, but it typically goes away quickly because the queries get canceled
                     scheduleNextRequest();
                 }
             }
@@ -741,10 +734,10 @@ public class HttpRemoteTask
                     Exception cause = response.getException();
                     if (cause == null) {
                         if (response.getStatusCode() == HttpStatus.OK.code()) {
-                            cause = new RuntimeException(String.format("Expected response from %s is empty", uri));
+                            cause = new RuntimeException(format("Expected response from %s is empty", uri));
                         }
                         else {
-                            cause = new RuntimeException(String.format("Expected response code from %s to be %s, but was %s: %s",
+                            cause = new RuntimeException(format("Expected response code from %s to be %s, but was %s: %s",
                                     uri,
                                     HttpStatus.OK.code(),
                                     response.getStatusCode(),
@@ -779,7 +772,8 @@ public class HttpRemoteTask
     private static boolean isSocketError(Throwable t)
     {
         while (t != null) {
-            if ((t instanceof SocketException) || (t instanceof SocketTimeoutException)) {
+            // in this case we consider an EOFException a socket error
+            if ((t instanceof SocketException) || (t instanceof SocketTimeoutException) || (t instanceof EOFException)) {
                 return true;
             }
             t = t.getCause();

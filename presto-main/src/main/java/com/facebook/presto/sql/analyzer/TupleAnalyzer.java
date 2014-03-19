@@ -46,6 +46,7 @@ import com.facebook.presto.sql.tree.QualifiedNameReference;
 import com.facebook.presto.sql.tree.Query;
 import com.facebook.presto.sql.tree.QuerySpecification;
 import com.facebook.presto.sql.tree.Relation;
+import com.facebook.presto.sql.tree.Row;
 import com.facebook.presto.sql.tree.SampledRelation;
 import com.facebook.presto.sql.tree.SelectItem;
 import com.facebook.presto.sql.tree.SingleColumn;
@@ -53,8 +54,10 @@ import com.facebook.presto.sql.tree.SortItem;
 import com.facebook.presto.sql.tree.Table;
 import com.facebook.presto.sql.tree.TableSubquery;
 import com.facebook.presto.sql.tree.Union;
+import com.facebook.presto.sql.tree.Values;
 import com.facebook.presto.sql.tree.Window;
 import com.google.common.base.Function;
+import com.google.common.base.Joiner;
 import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMultimap;
@@ -99,9 +102,9 @@ class TupleAnalyzer
     private final Analysis analysis;
     private final Session session;
     private final Metadata metadata;
-    private final boolean approximateQueriesEnabled;
+    private final boolean experimentalSyntaxEnabled;
 
-    public TupleAnalyzer(Analysis analysis, Session session, Metadata metadata, boolean approximateQueriesEnabled)
+    public TupleAnalyzer(Analysis analysis, Session session, Metadata metadata, boolean experimentalSyntaxEnabled)
     {
         checkNotNull(analysis, "analysis is null");
         checkNotNull(session, "session is null");
@@ -110,7 +113,7 @@ class TupleAnalyzer
         this.analysis = analysis;
         this.session = session;
         this.metadata = metadata;
-        this.approximateQueriesEnabled = approximateQueriesEnabled;
+        this.experimentalSyntaxEnabled = experimentalSyntaxEnabled;
     }
 
     @Override
@@ -224,8 +227,15 @@ class TupleAnalyzer
 
         double samplePercentageValue = ((Number) samplePercentageObject).doubleValue();
 
-        if (samplePercentageValue < 0.0 || samplePercentageValue > 100.0) {
-            throw new SemanticException(SemanticErrorCode.SAMPLE_PERCENTAGE_OUT_OF_RANGE, relation.getSamplePercentage(), "Sample percentage must be between 0 and 100");
+        if (samplePercentageValue < 0.0) {
+            throw new SemanticException(SemanticErrorCode.SAMPLE_PERCENTAGE_OUT_OF_RANGE, relation.getSamplePercentage(), "Sample percentage must be greater than or equal to 0");
+        }
+        else if ((samplePercentageValue > 100.0) && (relation.getType() != SampledRelation.Type.POISSONIZED || relation.isRescaled())) {
+            throw new SemanticException(SemanticErrorCode.SAMPLE_PERCENTAGE_OUT_OF_RANGE, relation.getSamplePercentage(), "Sample percentage must be less than or equal to 100");
+        }
+
+        if (relation.isRescaled() && !experimentalSyntaxEnabled) {
+            throw new SemanticException(NOT_SUPPORTED, relation, "Rescaling is not enabled");
         }
 
         TupleDescriptor descriptor = process(relation.getRelation(), context);
@@ -239,7 +249,7 @@ class TupleAnalyzer
     @Override
     protected TupleDescriptor visitTableSubquery(TableSubquery node, AnalysisContext context)
     {
-        StatementAnalyzer analyzer = new StatementAnalyzer(analysis, metadata, session, approximateQueriesEnabled, Optional.<QueryExplainer>absent());
+        StatementAnalyzer analyzer = new StatementAnalyzer(analysis, metadata, session, experimentalSyntaxEnabled, Optional.<QueryExplainer>absent());
         TupleDescriptor descriptor = analyzer.process(node.getQuery(), context);
 
         analysis.setOutputDescriptor(node, descriptor);
@@ -278,7 +288,7 @@ class TupleAnalyzer
     {
         checkState(node.getRelations().size() >= 2);
 
-        TupleAnalyzer analyzer = new TupleAnalyzer(analysis, session, metadata, approximateQueriesEnabled);
+        TupleAnalyzer analyzer = new TupleAnalyzer(analysis, session, metadata, experimentalSyntaxEnabled);
 
         // Use the first descriptor as the output descriptor for the UNION
         TupleDescriptor outputDescriptor = analyzer.process(node.getRelations().get(0), context);
@@ -348,8 +358,8 @@ class TupleAnalyzer
                 Expression leftExpression = new QualifiedNameReference(QualifiedName.of(column));
                 Expression rightExpression = new QualifiedNameReference(QualifiedName.of(column));
 
-                ExpressionAnalysis leftExpressionAnalysis = Analyzer.analyzeExpression(session, metadata, left, analysis, approximateQueriesEnabled, context, leftExpression);
-                ExpressionAnalysis rightExpressionAnalysis = Analyzer.analyzeExpression(session, metadata, right, analysis, approximateQueriesEnabled, context, rightExpression);
+                ExpressionAnalysis leftExpressionAnalysis = Analyzer.analyzeExpression(session, metadata, left, analysis, experimentalSyntaxEnabled, context, leftExpression);
+                ExpressionAnalysis rightExpressionAnalysis = Analyzer.analyzeExpression(session, metadata, right, analysis, experimentalSyntaxEnabled, context, rightExpression);
                 checkState(leftExpressionAnalysis.getSubqueryInPredicates().isEmpty(), "INVARIANT");
                 checkState(rightExpressionAnalysis.getSubqueryInPredicates().isEmpty(), "INVARIANT");
 
@@ -363,7 +373,7 @@ class TupleAnalyzer
 
             // ensure all names can be resolved, types match, etc (we don't need to record resolved names, subexpression types, etc. because
             // we do it further down when after we determine which subexpressions apply to left vs right tuple)
-            ExpressionAnalyzer analyzer = new ExpressionAnalyzer(analysis, session, metadata, approximateQueriesEnabled);
+            ExpressionAnalyzer analyzer = new ExpressionAnalyzer(analysis, session, metadata, experimentalSyntaxEnabled);
             analyzer.analyze(expression, output, context);
 
             Analyzer.verifyNoAggregatesOrWindowFunctions(metadata, expression, "JOIN");
@@ -414,8 +424,8 @@ class TupleAnalyzer
                 }
 
                 // analyze the clauses to record the types of all subexpressions and resolve names against the left/right underlying tuples
-                ExpressionAnalysis leftExpressionAnalysis = Analyzer.analyzeExpression(session, metadata, left, analysis, approximateQueriesEnabled, context, leftExpression);
-                ExpressionAnalysis rightExpressionAnalysis = Analyzer.analyzeExpression(session, metadata, right, analysis, approximateQueriesEnabled, context, rightExpression);
+                ExpressionAnalysis leftExpressionAnalysis = Analyzer.analyzeExpression(session, metadata, left, analysis, experimentalSyntaxEnabled, context, leftExpression);
+                ExpressionAnalysis rightExpressionAnalysis = Analyzer.analyzeExpression(session, metadata, right, analysis, experimentalSyntaxEnabled, context, rightExpression);
                 analysis.addJoinInPredicates(node, new Analysis.JoinInPredicates(leftExpressionAnalysis.getSubqueryInPredicates(), rightExpressionAnalysis.getSubqueryInPredicates()));
 
                 clauses.add(new EquiJoinClause(leftExpression, rightExpression));
@@ -429,6 +439,42 @@ class TupleAnalyzer
 
         analysis.setOutputDescriptor(node, output);
         return output;
+    }
+
+    @Override
+    protected TupleDescriptor visitValues(Values node, AnalysisContext context)
+    {
+        checkState(node.getRows().size() >= 1);
+
+        TupleAnalyzer analyzer = new TupleAnalyzer(analysis, session, metadata, experimentalSyntaxEnabled);
+
+        // Use the first descriptor as the output descriptor for the VALUES
+        TupleDescriptor outputDescriptor = analyzer.process(node.getRows().get(0), context);
+        Iterable<Type> types = transform(outputDescriptor.getFields(), typeGetter());
+
+        for (Row row : Iterables.skip(node.getRows(), 1)) {
+            TupleDescriptor descriptor = analyzer.process(row, context);
+            Iterable<Type> rowTypes = transform(descriptor.getFields(), typeGetter());
+            if (!elementsEqual(types, rowTypes)) {
+                throw new SemanticException(MISMATCHED_SET_COLUMN_TYPES, node, "Values rows have mismatched types: " +
+                        "Expected: (" + Joiner.on(", ").join(types) + "), " +
+                        "Actual: (" + Joiner.on(", ").join(rowTypes) + ")");
+            }
+        }
+
+        analysis.setOutputDescriptor(node, outputDescriptor);
+        return outputDescriptor;
+    }
+
+    @Override
+    protected TupleDescriptor visitRow(Row node, AnalysisContext context)
+    {
+        ImmutableList.Builder<Field> outputFields = ImmutableList.builder();
+        for (Expression expression : node.getItems()) {
+            ExpressionAnalysis expressionAnalysis = Analyzer.analyzeExpression(session, metadata, new TupleDescriptor(), analysis, experimentalSyntaxEnabled, context, expression);
+            outputFields.add(Field.newUnqualified(Optional.<String>absent(), expressionAnalysis.getType()));
+        }
+        return new TupleDescriptor(outputFields.build());
     }
 
     private void analyzeWindowFunctions(QuerySpecification node, List<FieldOrExpression> outputExpressions, List<FieldOrExpression> orderByExpressions)
@@ -500,7 +546,7 @@ class TupleAnalyzer
         if (node.getHaving().isPresent()) {
             Expression predicate = node.getHaving().get();
 
-            ExpressionAnalysis expressionAnalysis = Analyzer.analyzeExpression(session, metadata, tupleDescriptor, analysis, approximateQueriesEnabled, context, predicate);
+            ExpressionAnalysis expressionAnalysis = Analyzer.analyzeExpression(session, metadata, tupleDescriptor, analysis, experimentalSyntaxEnabled, context, predicate);
             analysis.addInPredicates(node, expressionAnalysis.getSubqueryInPredicates());
 
             if (expressionAnalysis.getType() != Type.BOOLEAN && expressionAnalysis.getType() != Type.NULL) {
@@ -565,7 +611,7 @@ class TupleAnalyzer
                 }
 
                 if (orderByExpression.isExpression()) {
-                    ExpressionAnalysis expressionAnalysis = Analyzer.analyzeExpression(session, metadata, tupleDescriptor, analysis, approximateQueriesEnabled, context, orderByExpression.getExpression());
+                    ExpressionAnalysis expressionAnalysis = Analyzer.analyzeExpression(session, metadata, tupleDescriptor, analysis, experimentalSyntaxEnabled, context, orderByExpression.getExpression());
                     analysis.addInPredicates(node, expressionAnalysis.getSubqueryInPredicates());
                 }
 
@@ -600,7 +646,7 @@ class TupleAnalyzer
                     groupByExpression = outputExpressions.get((int) (ordinal - 1));
                 }
                 else {
-                    ExpressionAnalysis expressionAnalysis = Analyzer.analyzeExpression(session, metadata, tupleDescriptor, analysis, approximateQueriesEnabled, context, expression);
+                    ExpressionAnalysis expressionAnalysis = Analyzer.analyzeExpression(session, metadata, tupleDescriptor, analysis, experimentalSyntaxEnabled, context, expression);
                     analysis.addInPredicates(node, expressionAnalysis.getSubqueryInPredicates());
                     groupByExpression = new FieldOrExpression(expression);
                 }
@@ -674,7 +720,7 @@ class TupleAnalyzer
             }
             else if (item instanceof SingleColumn) {
                 SingleColumn column = (SingleColumn) item;
-                ExpressionAnalysis expressionAnalysis = Analyzer.analyzeExpression(session, metadata, tupleDescriptor, analysis, approximateQueriesEnabled, context, column.getExpression());
+                ExpressionAnalysis expressionAnalysis = Analyzer.analyzeExpression(session, metadata, tupleDescriptor, analysis, experimentalSyntaxEnabled, context, column.getExpression());
                 analysis.addInPredicates(node, expressionAnalysis.getSubqueryInPredicates());
                 outputExpressionBuilder.add(new FieldOrExpression(column.getExpression()));
             }
@@ -696,7 +742,7 @@ class TupleAnalyzer
 
             Analyzer.verifyNoAggregatesOrWindowFunctions(metadata, predicate, "WHERE");
 
-            ExpressionAnalysis expressionAnalysis = Analyzer.analyzeExpression(session, metadata, tupleDescriptor, analysis, approximateQueriesEnabled, context, predicate);
+            ExpressionAnalysis expressionAnalysis = Analyzer.analyzeExpression(session, metadata, tupleDescriptor, analysis, experimentalSyntaxEnabled, context, predicate);
             analysis.addInPredicates(node, expressionAnalysis.getSubqueryInPredicates());
 
             if (expressionAnalysis.getType() != Type.BOOLEAN && expressionAnalysis.getType() != Type.NULL) {
@@ -712,7 +758,7 @@ class TupleAnalyzer
         TupleDescriptor fromDescriptor = new TupleDescriptor();
 
         if (node.getFrom() != null && !node.getFrom().isEmpty()) {
-            TupleAnalyzer analyzer = new TupleAnalyzer(analysis, session, metadata, approximateQueriesEnabled);
+            TupleAnalyzer analyzer = new TupleAnalyzer(analysis, session, metadata, experimentalSyntaxEnabled);
             if (node.getFrom().size() != 1) {
                 throw new SemanticException(NOT_SUPPORTED, node, "Implicit cross joins are not yet supported; use CROSS JOIN");
             }

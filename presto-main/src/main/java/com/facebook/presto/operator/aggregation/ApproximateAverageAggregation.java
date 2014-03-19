@@ -23,9 +23,8 @@ import com.facebook.presto.util.array.LongBigArray;
 import com.google.common.base.Optional;
 import com.google.common.base.Throwables;
 import io.airlift.slice.Slice;
-import org.apache.commons.math.MathException;
-import org.apache.commons.math.distribution.NormalDistribution;
-import org.apache.commons.math.distribution.NormalDistributionImpl;
+import org.apache.commons.math3.distribution.NormalDistribution;
+import org.apache.commons.math3.exception.OutOfRangeException;
 
 import static com.facebook.presto.operator.aggregation.VarianceAggregation.createIntermediate;
 import static com.facebook.presto.operator.aggregation.VarianceAggregation.getCount;
@@ -39,7 +38,7 @@ import static com.google.common.base.Preconditions.checkState;
 public class ApproximateAverageAggregation
         extends SimpleAggregationFunction
 {
-    private static final NormalDistribution NORMAL_DISTRIBUTION = new NormalDistributionImpl();
+    private static final NormalDistribution NORMAL_DISTRIBUTION = new NormalDistribution();
     private final boolean inputIsLong;
 
     public ApproximateAverageAggregation(Type parameterType)
@@ -170,14 +169,16 @@ public class ApproximateAverageAggregation
                     double currentM2 = m2s.get(groupId);
 
                     // Use numerically stable variant
-                    long newCount = currentCount + inputCount;
-                    double newMean = ((currentCount * currentMean) + (inputCount * inputMean)) / newCount;
-                    double delta = inputMean - currentMean;
-                    double newM2 = currentM2 + inputM2 + ((delta * delta) * (currentCount * inputCount)) / newCount;
+                    if (inputCount > 0) {
+                        long newCount = currentCount + inputCount;
+                        double newMean = ((currentCount * currentMean) + (inputCount * inputMean)) / newCount;
+                        double delta = inputMean - currentMean;
+                        double newM2 = currentM2 + inputM2 + ((delta * delta) * (currentCount * inputCount)) / newCount;
 
-                    counts.set(groupId, newCount);
-                    means.set(groupId, newMean);
-                    m2s.set(groupId, newM2);
+                        counts.set(groupId, newCount);
+                        means.set(groupId, newMean);
+                        m2s.set(groupId, newM2);
+                    }
                 }
             }
             checkState(!values.advanceNextPosition());
@@ -291,14 +292,16 @@ public class ApproximateAverageAggregation
                     double inputM2 = getM2(slice);
 
                     // Use numerically stable variant
-                    long newCount = currentCount + inputCount;
-                    double newMean = ((currentCount * currentMean) + (inputCount * inputMean)) / newCount;
-                    double delta = inputMean - currentMean;
-                    double newM2 = currentM2 + inputM2 + ((delta * delta) * (currentCount * inputCount)) / newCount;
+                    if (inputCount > 0) {
+                        long newCount = currentCount + inputCount;
+                        double newMean = ((currentCount * currentMean) + (inputCount * inputMean)) / newCount;
+                        double delta = inputMean - currentMean;
+                        double newM2 = currentM2 + inputM2 + ((delta * delta) * (currentCount * inputCount)) / newCount;
 
-                    currentCount = newCount;
-                    currentMean = newMean;
-                    currentM2 = newM2;
+                        currentCount = newCount;
+                        currentMean = newMean;
+                        currentM2 = newM2;
+                    }
                 }
             }
             checkState(!values.advanceNextPosition());
@@ -329,7 +332,7 @@ public class ApproximateAverageAggregation
         try {
             zScore = NORMAL_DISTRIBUTION.inverseCumulativeProbability((1 + confidence) / 2);
         }
-        catch (MathException e) {
+        catch (OutOfRangeException e) {
             throw Throwables.propagate(e);
         }
         // Error bars at 99% confidence interval

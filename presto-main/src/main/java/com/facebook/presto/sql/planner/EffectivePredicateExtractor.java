@@ -191,10 +191,15 @@ public class EffectivePredicateExtractor
             public Domain apply(Domain domain)
             {
                 // Retain nullability, but collapse each SortedRangeSet into a single span
-                return Domain.create(SortedRangeSet.of(domain.getRanges().getSpan()), domain.isNullAllowed());
+                return Domain.create(getSortedRangeSpan(domain.getRanges()), domain.isNullAllowed());
             }
         });
         return TupleDomain.withColumnDomains(spannedDomains);
+    }
+
+    private static SortedRangeSet getSortedRangeSpan(SortedRangeSet rangeSet)
+    {
+        return rangeSet.isNone() ? SortedRangeSet.none(rangeSet.getType()) : SortedRangeSet.of(rangeSet.getSpan());
     }
 
     @Override
@@ -282,9 +287,11 @@ public class EffectivePredicateExtractor
 
         ImmutableList.Builder<Expression> effectiveConjuncts = ImmutableList.builder();
         for (Expression conjunct : EqualityInference.nonInferrableConjuncts(expression)) {
-            Expression rewritten = equalityInference.rewriteExpression(conjunct, in(symbols));
-            if (rewritten != null) {
-                effectiveConjuncts.add(rewritten);
+            if (DeterminismEvaluator.isDeterministic(conjunct)) {
+                Expression rewritten = equalityInference.rewriteExpression(conjunct, in(symbols));
+                if (rewritten != null) {
+                    effectiveConjuncts.add(rewritten);
+                }
             }
         }
 

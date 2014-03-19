@@ -16,6 +16,7 @@ package com.facebook.presto.hive;
 import com.facebook.presto.hadoop.HadoopFileSystemCache;
 import com.facebook.presto.hadoop.HadoopNative;
 import com.facebook.presto.hive.util.BoundedExecutor;
+import com.facebook.presto.hive.util.HadoopApiStats;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ColumnType;
@@ -95,6 +96,7 @@ import static com.facebook.presto.hive.HiveBucketing.HiveBucket;
 import static com.facebook.presto.hive.HiveBucketing.getHiveBucket;
 import static com.facebook.presto.hive.HiveColumnHandle.columnMetadataGetter;
 import static com.facebook.presto.hive.HiveColumnHandle.hiveColumnHandle;
+import static com.facebook.presto.hive.HiveColumnHandle.SAMPLE_WEIGHT_COLUMN_NAME;
 import static com.facebook.presto.hive.HivePartition.UNPARTITIONED_ID;
 import static com.facebook.presto.hive.HiveType.columnTypeToHiveType;
 import static com.facebook.presto.hive.HiveType.getHiveType;
@@ -136,6 +138,7 @@ public class HiveClient
     private final int minPartitionBatchSize;
     private final int maxPartitionBatchSize;
     private final CachingHiveMetastore metastore;
+    private final HadoopApiStats hadoopApiStats;
     private final HdfsEnvironment hdfsEnvironment;
     private final Executor executor;
     private final DataSize maxSplitSize;
@@ -144,11 +147,13 @@ public class HiveClient
     public HiveClient(HiveConnectorId connectorId,
             HiveClientConfig hiveClientConfig,
             CachingHiveMetastore metastore,
+            HadoopApiStats hadoopApiStats,
             HdfsEnvironment hdfsEnvironment,
             @ForHiveClient ExecutorService executorService)
     {
         this(connectorId,
                 metastore,
+                hadoopApiStats,
                 hdfsEnvironment,
                 new BoundedExecutor(executorService, hiveClientConfig.getMaxGlobalSplitIteratorThreads()),
                 hiveClientConfig.getMaxSplitSize(),
@@ -160,6 +165,7 @@ public class HiveClient
 
     public HiveClient(HiveConnectorId connectorId,
             CachingHiveMetastore metastore,
+            HadoopApiStats hadoopApiStats,
             HdfsEnvironment hdfsEnvironment,
             Executor executor,
             DataSize maxSplitSize,
@@ -179,6 +185,7 @@ public class HiveClient
 
         this.metastore = checkNotNull(metastore, "metastore is null");
         this.hdfsEnvironment = checkNotNull(hdfsEnvironment, "hdfsEnvironment is null");
+        this.hadoopApiStats = checkNotNull(hadoopApiStats, "hadoopApiStats is null");
 
         this.executor = checkNotNull(executor, "executor is null");
     }
@@ -232,7 +239,7 @@ public class HiveClient
     {
         try {
             Table table = metastore.getTable(tableName.getSchemaName(), tableName.getTableName());
-            List<ColumnMetadata> columns = ImmutableList.copyOf(transform(getColumnHandles(table), columnMetadataGetter()));
+            List<ColumnMetadata> columns = ImmutableList.copyOf(transform(getColumnHandles(table, false), columnMetadataGetter()));
             return new ConnectorTableMetadata(tableName, columns, table.getOwner());
         }
         catch (NoSuchObjectException e) {
@@ -276,13 +283,25 @@ public class HiveClient
     @Override
     public ColumnHandle getSampleWeightColumnHandle(TableHandle tableHandle)
     {
-        return null;
+        SchemaTableName tableName = getTableName(tableHandle);
+        try {
+            Table table = metastore.getTable(tableName.getSchemaName(), tableName.getTableName());
+            for (HiveColumnHandle columnHandle : getColumnHandles(table, true)) {
+                if (columnHandle.getName().equals(HiveColumnHandle.SAMPLE_WEIGHT_COLUMN_NAME)) {
+                    return columnHandle;
+                }
+            }
+            return null;
+        }
+        catch (NoSuchObjectException e) {
+            throw new TableNotFoundException(tableName);
+        }
     }
 
     @Override
     public boolean canCreateSampledTables()
     {
-        return false;
+        return true;
     }
 
     @Override
@@ -292,7 +311,7 @@ public class HiveClient
         try {
             Table table = metastore.getTable(tableName.getSchemaName(), tableName.getTableName());
             ImmutableMap.Builder<String, ColumnHandle> columnHandles = ImmutableMap.builder();
-            for (HiveColumnHandle columnHandle : getColumnHandles(table)) {
+            for (HiveColumnHandle columnHandle : getColumnHandles(table, false)) {
                 columnHandles.put(columnHandle.getName(), columnHandle);
             }
             return columnHandles.build();
@@ -302,7 +321,7 @@ public class HiveClient
         }
     }
 
-    private List<HiveColumnHandle> getColumnHandles(Table table)
+    private List<HiveColumnHandle> getColumnHandles(Table table, boolean includeSampleWeight)
     {
         try {
             ImmutableList.Builder<HiveColumnHandle> columns = ImmutableList.builder();
@@ -312,7 +331,7 @@ public class HiveClient
             for (StructField field : getTableStructFields(table)) {
                 // ignore unsupported types rather than failing
                 HiveType hiveType = getHiveType(field.getFieldObjectInspector());
-                if (hiveType != null) {
+                if (hiveType != null && (includeSampleWeight || !field.getFieldName().equals(SAMPLE_WEIGHT_COLUMN_NAME))) {
                     columns.add(new HiveColumnHandle(connectorId, field.getFieldName(), hiveColumnIndex, hiveType, hiveColumnIndex, false));
                 }
                 hiveColumnIndex++;
@@ -391,6 +410,10 @@ public class HiveClient
             columnNames.add(column.getName());
             columnTypes.add(column.getType());
         }
+        if (tableMetadata.isSampled()) {
+            columnNames.add(SAMPLE_WEIGHT_COLUMN_NAME);
+            columnTypes.add(ColumnType.LONG);
+        }
 
         // get the root directory for the database
         SchemaTableName table = tableMetadata.getTable();
@@ -414,6 +437,18 @@ public class HiveClient
         Path targetPath = new Path(databasePath, tableName);
         if (pathExists(targetPath)) {
             throw new RuntimeException(format("Target directory for table '%s' already exists: %s", table, targetPath));
+        }
+
+        if (!useTemporaryDirectory(targetPath)) {
+            return new HiveOutputTableHandle(
+                connectorId,
+                schemaName,
+                tableName,
+                columnNames.build(),
+                columnTypes.build(),
+                tableMetadata.getOwner(),
+                targetPath.toString(),
+                targetPath.toString());
         }
 
         // use a per-user temporary directory to avoid permission problems
@@ -445,13 +480,16 @@ public class HiveClient
 
         // verify no one raced us to create the target directory
         Path targetPath = new Path(handle.getTargetPath());
-        if (pathExists(targetPath)) {
-            SchemaTableName table = new SchemaTableName(handle.getSchemaName(), handle.getTableName());
-            throw new RuntimeException(format("Unable to commit creation of table '%s': target directory already exists: %s", table, targetPath));
-        }
 
-        // rename the temporary directory to the target
-        rename(new Path(handle.getTemporaryPath()), targetPath);
+        // rename if using a temporary directory
+        if (handle.hasTemporaryPath()) {
+            if (pathExists(targetPath)) {
+                SchemaTableName table = new SchemaTableName(handle.getSchemaName(), handle.getTableName());
+                throw new RuntimeException(format("Unable to commit creation of table '%s': target directory already exists: %s", table, targetPath));
+            }
+            // rename the temporary directory to the target
+            rename(new Path(handle.getTemporaryPath()), targetPath);
+        }
 
         // create the table in the metastore
         List<String> types = FluentIterable.from(handle.getColumnTypes())
@@ -459,11 +497,18 @@ public class HiveClient
                 .transform(hiveTypeNameGetter())
                 .toList();
 
+        boolean sampled = false;
         ImmutableList.Builder<FieldSchema> columns = ImmutableList.builder();
         for (int i = 0; i < handle.getColumnNames().size(); i++) {
             String name = handle.getColumnNames().get(i);
             String type = types.get(i);
-            columns.add(new FieldSchema(name, type, null));
+            if (name.equals(SAMPLE_WEIGHT_COLUMN_NAME)) {
+                columns.add(new FieldSchema(name, type, "Presto sample weight column"));
+                sampled = true;
+            }
+            else {
+                columns.add(new FieldSchema(name, type, null));
+            }
         }
 
         SerDeInfo serdeInfo = new SerDeInfo();
@@ -482,7 +527,11 @@ public class HiveClient
         table.setTableName(handle.getTableName());
         table.setOwner(handle.getTableOwner());
         table.setTableType(TableType.MANAGED_TABLE.toString());
-        table.setParameters(ImmutableMap.of("comment", "Created by Presto"));
+        String tableComment = "Created by Presto";
+        if (sampled) {
+            tableComment = "Sampled table created by Presto. Only query this table from Hive if you understand how Presto implements sampling.";
+        }
+        table.setParameters(ImmutableMap.of("comment", tableComment));
         table.setSd(sd);
 
         metastore.createTable(table);
@@ -508,6 +557,17 @@ public class HiveClient
         }
         catch (NoSuchObjectException e) {
             throw new SchemaNotFoundException(database);
+        }
+    }
+
+    private boolean useTemporaryDirectory(Path path)
+    {
+        try {
+            // skip using temporary directory for S3
+            return !(getFileSystem(path) instanceof PrestoS3FileSystem);
+        }
+        catch (IOException e) {
+            throw new RuntimeException("Failed checking path: " + path, e);
         }
     }
 
@@ -679,6 +739,7 @@ public class HiveClient
                 maxOutstandingSplits,
                 maxSplitIteratorThreads,
                 hdfsEnvironment,
+                hadoopApiStats,
                 executor,
                 maxPartitionBatchSize).get();
     }

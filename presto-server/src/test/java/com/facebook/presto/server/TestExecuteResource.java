@@ -18,11 +18,11 @@ import com.facebook.presto.server.testing.TestingPrestoServer;
 import com.facebook.presto.sql.analyzer.Session;
 import com.google.common.base.Charsets;
 import com.google.common.net.HttpHeaders;
-import io.airlift.http.client.ApacheHttpClient;
 import io.airlift.http.client.HttpClient;
 import io.airlift.http.client.HttpStatus;
 import io.airlift.http.client.Request;
 import io.airlift.testing.Closeables;
+import io.airlift.http.client.jetty.JettyHttpClient;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
@@ -33,6 +33,7 @@ import static io.airlift.http.client.StringResponseHandler.StringResponse;
 import static io.airlift.http.client.StringResponseHandler.createStringResponseHandler;
 import static org.testng.Assert.assertEquals;
 
+@Test(singleThreaded = true)
 public class TestExecuteResource
 {
     private TestingPrestoServer server;
@@ -43,7 +44,7 @@ public class TestExecuteResource
             throws Exception
     {
         server = new TestingPrestoServer();
-        client = new ApacheHttpClient();
+        client = new JettyHttpClient();
     }
 
     @SuppressWarnings("deprecation")

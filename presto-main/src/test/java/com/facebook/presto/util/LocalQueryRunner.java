@@ -28,7 +28,6 @@ import com.facebook.presto.connector.system.SystemSplitManager;
 import com.facebook.presto.connector.system.SystemTablesManager;
 import com.facebook.presto.connector.system.SystemTablesMetadata;
 import com.facebook.presto.execution.TaskId;
-import com.facebook.presto.importer.MockPeriodicImportManager;
 import com.facebook.presto.metadata.HandleResolver;
 import com.facebook.presto.metadata.InMemoryNodeManager;
 import com.facebook.presto.metadata.LocalStorageManager;
@@ -79,8 +78,8 @@ import com.facebook.presto.sql.planner.SubPlan;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
+import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.facebook.presto.sql.tree.Statement;
-import com.facebook.presto.storage.MockStorageManager;
 import com.facebook.presto.tuple.TupleInfo;
 import com.google.common.base.Optional;
 import com.google.common.base.Throwables;
@@ -281,15 +280,15 @@ public class LocalQueryRunner
         }
 
         PlanNodeIdAllocator idAllocator = new PlanNodeIdAllocator();
-        AnalyzerConfig analyzerConfig = new AnalyzerConfig().setApproximateQueriesEnabled(true);
+        AnalyzerConfig analyzerConfig = new AnalyzerConfig().setExperimentalSyntaxEnabled(true);
         PlanOptimizersFactory planOptimizersFactory = new PlanOptimizersFactory(metadata, splitManager, analyzerConfig);
 
-        QueryExplainer queryExplainer = new QueryExplainer(session, planOptimizersFactory.get(), metadata, new MockPeriodicImportManager(), new MockStorageManager(), analyzerConfig.isApproximateQueriesEnabled());
-        Analyzer analyzer = new Analyzer(session, metadata, Optional.of(queryExplainer), analyzerConfig.isApproximateQueriesEnabled());
+        QueryExplainer queryExplainer = new QueryExplainer(session, planOptimizersFactory.get(), metadata, analyzerConfig.isExperimentalSyntaxEnabled());
+        Analyzer analyzer = new Analyzer(session, metadata, Optional.of(queryExplainer), analyzerConfig.isExperimentalSyntaxEnabled());
 
         Analysis analysis = analyzer.analyze(statement);
 
-        Plan plan = new LogicalPlanner(session, planOptimizersFactory.get(), idAllocator, metadata, new MockPeriodicImportManager(), new MockStorageManager()).plan(analysis);
+        Plan plan = new LogicalPlanner(session, planOptimizersFactory.get(), idAllocator, metadata).plan(analysis);
         if (printPlan) {
             System.out.println(PlanPrinter.textLogicalPlan(plan.getRoot(), plan.getTypes()));
         }
@@ -318,6 +317,10 @@ public class LocalQueryRunner
         List<TaskSource> sources = new ArrayList<>();
         long sequenceId = 0;
         for (PlanNode sourceNode : subplan.getFragment().getSources()) {
+            if (sourceNode instanceof ValuesNode) {
+                continue;
+            }
+
             TableScanNode tableScan = (TableScanNode) sourceNode;
 
             SplitSource splitSource = splitManager.getPartitionSplits(tableScan.getTable(), getPartitions(tableScan));

@@ -29,6 +29,27 @@ public abstract class AbstractTestSampledQueries
         extends AbstractTestQueries
 {
     @Test
+    public void testApproximateQueryCount()
+            throws Exception
+    {
+        assertApproximateQuery("SELECT COUNT(*) FROM orders APPROXIMATE AT 99.999 CONFIDENCE", "SELECT 2 * COUNT(*) FROM orders");
+    }
+
+    @Test
+    public void testApproximateQueryCountCustkey()
+            throws Exception
+    {
+        assertApproximateQuery("SELECT COUNT(custkey) FROM orders APPROXIMATE AT 99.999 CONFIDENCE", "SELECT 2 * COUNT(custkey) FROM orders");
+    }
+
+    @Test
+    public void testApproximateQuerySum()
+            throws Exception
+    {
+        assertApproximateQuery("SELECT SUM(totalprice) FROM orders APPROXIMATE AT 99.999 CONFIDENCE", "SELECT 2 * SUM(totalprice) FROM orders");
+    }
+
+    @Test
     public void testApproximateQueryAverage()
             throws Exception
     {
@@ -40,7 +61,7 @@ public abstract class AbstractTestSampledQueries
             throws Exception
     {
         assertSampledQuery("SELECT COUNT(*) FROM orders a RIGHT OUTER JOIN orders b ON a.custkey = b.orderkey",
-                "SELECT COUNT(*) FROM (SELECT * FROM orders UNION ALL SELECT * FROM orders) a LEFT OUTER JOIN (SELECT * FROM orders UNION ALL SELECT * FROM orders) b ON a.orderkey = b.custkey");
+                "SELECT COUNT(*) FROM (SELECT * FROM orders UNION ALL SELECT * FROM orders) a RIGHT OUTER JOIN (SELECT * FROM orders UNION ALL SELECT * FROM orders) b ON a.custkey = b.orderkey");
     }
 
     @Test
@@ -210,9 +231,11 @@ public abstract class AbstractTestSampledQueries
     {
         long start = System.nanoTime();
         MaterializedResult actualResults = computeActualSampled(actual);
-        log.info("FINISHED in %s", Duration.nanosSince(start));
+        Duration actualTime = Duration.nanosSince(start);
 
+        long expectedStart = System.nanoTime();
         MaterializedResult expectedResults = computeExpected(expected, actualResults.getTupleInfos());
+        log.info("FINISHED in presto: %s, h2: %s, total: %s", actualTime, Duration.nanosSince(expectedStart), Duration.nanosSince(start));
 
         if (ensureOrdering) {
             assertEquals(actualResults.getMaterializedTuples(), expectedResults.getMaterializedTuples());
