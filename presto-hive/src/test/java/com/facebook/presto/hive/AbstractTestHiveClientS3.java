@@ -14,7 +14,6 @@
 package com.facebook.presto.hive;
 
 import com.facebook.presto.hive.shaded.org.apache.thrift.TException;
-import com.facebook.presto.hive.util.HadoopApiStats;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ColumnType;
@@ -96,8 +95,9 @@ public abstract class AbstractTestHiveClientS3
                 new HiveConnectorId("hive-test"),
                 hiveClientConfig,
                 metastoreClient,
-                new HadoopApiStats(),
+                new NamenodeStats(),
                 new HdfsEnvironment(new HdfsConfiguration(hiveClientConfig)),
+                new HadoopDirectoryLister(),
                 sameThreadExecutor());
     }
 
@@ -197,8 +197,7 @@ public abstract class AbstractTestHiveClientS3
         PartitionResult partitionResult = client.getPartitions(tableHandle, TupleDomain.all());
         assertEquals(partitionResult.getPartitions().size(), 1);
         SplitSource splitSource = client.getPartitionSplits(tableHandle, partitionResult.getPartitions());
-        Split split = getOnlyElement(splitSource.getNextBatch(1000));
-        assertTrue(splitSource.isFinished());
+        Split split = getOnlyElement(getAllSplits(splitSource));
 
         try (RecordCursor cursor = client.getRecordSet(split, columnHandles).cursor()) {
             assertTrue(cursor.advanceNextPosition());

@@ -13,7 +13,6 @@
  */
 package com.facebook.presto.hive;
 
-import com.facebook.presto.hive.util.HadoopApiStats;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ColumnType;
@@ -187,8 +186,9 @@ public abstract class AbstractTestHiveClient
         HiveClient client = new HiveClient(
                 new HiveConnectorId(connectorName),
                 metastoreClient,
-                new HadoopApiStats(),
+                new NamenodeStats(),
                 new HdfsEnvironment(new HdfsConfiguration(hiveClientConfig)),
+                new HadoopDirectoryLister(),
                 sameThreadExecutor(),
                 hiveClientConfig.getMaxSplitSize(),
                 maxOutstandingSplits,
@@ -882,8 +882,7 @@ public abstract class AbstractTestHiveClient
         PartitionResult partitionResult = splitManager.getPartitions(tableHandle, TupleDomain.all());
         assertEquals(partitionResult.getPartitions().size(), 1);
         SplitSource splitSource = splitManager.getPartitionSplits(tableHandle, partitionResult.getPartitions());
-        Split split = getOnlyElement(splitSource.getNextBatch(1000));
-        assertTrue(splitSource.isFinished());
+        Split split = getOnlyElement(getAllSplits(splitSource));
 
         try (RecordCursor cursor = recordSetProvider.getRecordSet(split, columnHandles).cursor()) {
             assertRecordCursorType(cursor, "rcfile-binary");
@@ -971,8 +970,7 @@ public abstract class AbstractTestHiveClient
         PartitionResult partitionResult = splitManager.getPartitions(tableHandle, TupleDomain.all());
         assertEquals(partitionResult.getPartitions().size(), 1);
         SplitSource splitSource = splitManager.getPartitionSplits(tableHandle, partitionResult.getPartitions());
-        Split split = getOnlyElement(splitSource.getNextBatch(1000));
-        assertTrue(splitSource.isFinished());
+        Split split = getOnlyElement(getAllSplits(splitSource));
 
         try (RecordCursor cursor = recordSetProvider.getRecordSet(split, columnHandles).cursor()) {
             assertRecordCursorType(cursor, "rcfile-binary");
