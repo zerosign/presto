@@ -18,7 +18,6 @@ import com.facebook.presto.hadoop.HadoopNative;
 import com.facebook.presto.hive.util.BoundedExecutor;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
-import com.facebook.presto.spi.ColumnType;
 import com.facebook.presto.spi.ConnectorHandleResolver;
 import com.facebook.presto.spi.ConnectorMetadata;
 import com.facebook.presto.spi.ConnectorOutputHandleResolver;
@@ -42,6 +41,7 @@ import com.facebook.presto.spi.SplitSource;
 import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.TableNotFoundException;
 import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.type.Type;
 import com.google.common.base.Function;
 import com.google.common.base.Objects;
 import com.google.common.base.Optional;
@@ -77,6 +77,7 @@ import org.apache.hadoop.hive.serde2.SerDeException;
 import org.apache.hadoop.hive.serde2.columnar.LazyBinaryColumnarSerDe;
 import org.apache.hadoop.hive.serde2.objectinspector.StructField;
 import org.apache.hadoop.mapred.JobConf;
+import org.joda.time.DateTimeZone;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -104,6 +105,10 @@ import static com.facebook.presto.hive.HiveType.hiveTypeNameGetter;
 import static com.facebook.presto.hive.HiveUtil.getTableStructFields;
 import static com.facebook.presto.hive.HiveUtil.parseHiveTimestamp;
 import static com.facebook.presto.hive.UnpartitionedPartition.UNPARTITIONED_PARTITION;
+import static com.facebook.presto.spi.type.BigintType.BIGINT;
+import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
+import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
@@ -140,6 +145,7 @@ public class HiveClient
     private final NamenodeStats namenodeStats;
     private final HdfsEnvironment hdfsEnvironment;
     private final DirectoryLister directoryLister;
+    private final DateTimeZone timeZone;
     private final Executor executor;
     private final DataSize maxSplitSize;
 
@@ -157,6 +163,7 @@ public class HiveClient
                 namenodeStats,
                 hdfsEnvironment,
                 directoryLister,
+                DateTimeZone.forTimeZone(hiveClientConfig.getTimeZone()),
                 new BoundedExecutor(executorService, hiveClientConfig.getMaxGlobalSplitIteratorThreads()),
                 hiveClientConfig.getMaxSplitSize(),
                 hiveClientConfig.getMaxOutstandingSplits(),
@@ -170,6 +177,7 @@ public class HiveClient
             NamenodeStats namenodeStats,
             HdfsEnvironment hdfsEnvironment,
             DirectoryLister directoryLister,
+            DateTimeZone timeZone,
             Executor executor,
             DataSize maxSplitSize,
             int maxOutstandingSplits,
@@ -190,6 +198,7 @@ public class HiveClient
         this.hdfsEnvironment = checkNotNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.namenodeStats = checkNotNull(namenodeStats, "namenodeStats is null");
         this.directoryLister = checkNotNull(directoryLister, "directoryLister is null");
+        this.timeZone = checkNotNull(timeZone, "timeZone is null");
 
         this.executor = checkNotNull(executor, "executor is null");
     }
@@ -409,14 +418,14 @@ public class HiveClient
         checkArgument(!isNullOrEmpty(tableMetadata.getOwner()), "Table owner is null or empty");
 
         ImmutableList.Builder<String> columnNames = ImmutableList.builder();
-        ImmutableList.Builder<ColumnType> columnTypes = ImmutableList.builder();
+        ImmutableList.Builder<Type> columnTypes = ImmutableList.builder();
         for (ColumnMetadata column : tableMetadata.getColumns()) {
             columnNames.add(column.getName());
             columnTypes.add(column.getType());
         }
         if (tableMetadata.isSampled()) {
             columnNames.add(SAMPLE_WEIGHT_COLUMN_NAME);
-            columnTypes.add(ColumnType.LONG);
+            columnTypes.add(BIGINT);
         }
 
         // get the root directory for the database
@@ -694,7 +703,7 @@ public class HiveClient
         // do a final pass to filter based on fields that could not be used to build the prefix
         Map<String, ColumnHandle> partitionKeysByName = partitionKeysByNameBuilder.build();
         List<Partition> partitions = FluentIterable.from(partitionNames)
-                .transform(toPartition(tableName, partitionKeysByName, bucket))
+                .transform(toPartition(tableName, partitionKeysByName, bucket, timeZone))
                 .filter(partitionMatches(tupleDomain))
                 .filter(Partition.class)
                 .toList();
@@ -808,7 +817,7 @@ public class HiveClient
         checkArgument(split instanceof HiveSplit, "expected instance of %s: %s", HiveSplit.class, split.getClass());
 
         List<HiveColumnHandle> hiveColumns = ImmutableList.copyOf(transform(columns, hiveColumnHandle()));
-        return new HiveRecordSet(hdfsEnvironment, (HiveSplit) split, hiveColumns, HiveRecordCursorProviders.getDefaultProviders());
+        return new HiveRecordSet(hdfsEnvironment, (HiveSplit) split, hiveColumns, HiveRecordCursorProviders.getDefaultProviders(), timeZone);
     }
 
     @Override
@@ -870,7 +879,8 @@ public class HiveClient
     private static Function<String, HivePartition> toPartition(
             final SchemaTableName tableName,
             final Map<String, ColumnHandle> columnsByName,
-            final Optional<HiveBucket> bucket)
+            final Optional<HiveBucket> bucket,
+            final DateTimeZone timeZone)
     {
         return new Function<String, HivePartition>()
         {
@@ -891,37 +901,36 @@ public class HiveClient
                         HiveColumnHandle hiveColumnHandle = (HiveColumnHandle) columnHandle;
 
                         String value = entry.getValue();
-                        switch (hiveColumnHandle.getType()) {
-                            case BOOLEAN:
-                                if (value.isEmpty()) {
-                                    builder.put(columnHandle, false);
-                                }
-                                else {
-                                    builder.put(columnHandle, parseBoolean(value));
-                                }
-                                break;
-                            case LONG:
-                                if (value.isEmpty()) {
-                                    builder.put(columnHandle, 0L);
-                                }
-                                else if (hiveColumnHandle.getHiveType() == HiveType.TIMESTAMP) {
-                                    builder.put(columnHandle, parseHiveTimestamp(value));
-                                }
-                                else {
-                                    builder.put(columnHandle, parseLong(value));
-                                }
-                                break;
-                            case DOUBLE:
-                                if (value.isEmpty()) {
-                                    builder.put(columnHandle, 0.0);
-                                }
-                                else {
-                                    builder.put(columnHandle, parseDouble(value));
-                                }
-                                break;
-                            case STRING:
-                                builder.put(columnHandle, value);
-                                break;
+                        Type type = hiveColumnHandle.getType();
+                        if (BOOLEAN.equals(type)) {
+                            if (value.isEmpty()) {
+                                builder.put(columnHandle, false);
+                            }
+                            else {
+                                builder.put(columnHandle, parseBoolean(value));
+                            }
+                        }
+                        else if (BIGINT.equals(type)) {
+                            if (value.isEmpty()) {
+                                builder.put(columnHandle, 0L);
+                            }
+                            else if (hiveColumnHandle.getHiveType() == HiveType.TIMESTAMP) {
+                                builder.put(columnHandle, parseHiveTimestamp(value, timeZone));
+                            }
+                            else {
+                                builder.put(columnHandle, parseLong(value));
+                            }
+                        }
+                        else if (DOUBLE.equals(type)) {
+                            if (value.isEmpty()) {
+                                builder.put(columnHandle, 0.0);
+                            }
+                            else {
+                                builder.put(columnHandle, parseDouble(value));
+                            }
+                        }
+                        else if (VARCHAR.equals(type)) {
+                            builder.put(columnHandle, value);
                         }
                     }
 

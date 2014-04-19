@@ -32,6 +32,7 @@ import org.apache.hadoop.mapred.InputFormat;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.TextInputFormat;
 import org.apache.hadoop.util.ReflectionUtils;
+import org.joda.time.DateTimeZone;
 import org.joda.time.format.DateTimeFormat;
 import org.joda.time.format.DateTimeFormatter;
 import org.joda.time.format.DateTimeFormatterBuilder;
@@ -42,7 +43,6 @@ import java.util.List;
 import java.util.Properties;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.apache.hadoop.hive.metastore.MetaStoreUtils.getDeserializer;
 import static org.apache.hadoop.hive.metastore.MetaStoreUtils.getTableMetadata;
 import static org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.FILE_INPUT_FORMAT;
@@ -50,7 +50,6 @@ import static org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector.Cate
 
 final class HiveUtil
 {
-    // timestamps are stored in local time
     private static final DateTimeFormatter HIVE_TIMESTAMP_PARSER = new DateTimeFormatterBuilder()
             .append(DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss"))
             .appendOptional(DateTimeFormat.forPattern(".SSSSSSSSS").getParser())
@@ -112,9 +111,9 @@ final class HiveUtil
         };
     }
 
-    public static long parseHiveTimestamp(String value)
+    public static long parseHiveTimestamp(String value, DateTimeZone timeZone)
     {
-        return MILLISECONDS.toSeconds(HIVE_TIMESTAMP_PARSER.parseMillis(value));
+        return HIVE_TIMESTAMP_PARSER.withZone(timeZone).parseMillis(value);
     }
 
     static boolean isSplittable(InputFormat<?, ?> inputFormat, FileSystem fileSystem, Path path)

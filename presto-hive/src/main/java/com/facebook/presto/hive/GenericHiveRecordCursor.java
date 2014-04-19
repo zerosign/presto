@@ -14,10 +14,11 @@
 package com.facebook.presto.hive;
 
 import com.facebook.presto.hive.util.SerDeUtils;
-import com.facebook.presto.spi.ColumnType;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.type.Type;
 import com.google.common.base.Charsets;
 import com.google.common.base.Throwables;
+import io.airlift.slice.Slice;
 import org.apache.hadoop.hive.metastore.MetaStoreUtils;
 import org.apache.hadoop.hive.metastore.api.MetaException;
 import org.apache.hadoop.hive.serde2.Deserializer;
@@ -28,6 +29,7 @@ import org.apache.hadoop.hive.serde2.objectinspector.StructField;
 import org.apache.hadoop.hive.serde2.objectinspector.StructObjectInspector;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.mapred.RecordReader;
+import org.joda.time.DateTimeZone;
 
 import java.io.IOException;
 import java.sql.Timestamp;
@@ -40,13 +42,17 @@ import static com.facebook.presto.hive.HiveBooleanParser.isFalse;
 import static com.facebook.presto.hive.HiveBooleanParser.isTrue;
 import static com.facebook.presto.hive.NumberParser.parseDouble;
 import static com.facebook.presto.hive.NumberParser.parseLong;
+import static com.facebook.presto.spi.type.BigintType.BIGINT;
+import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
+import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
+import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.Maps.uniqueIndex;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 class GenericHiveRecordCursor<K, V extends Writable>
         extends HiveRecordCursor
@@ -58,7 +64,7 @@ class GenericHiveRecordCursor<K, V extends Writable>
     @SuppressWarnings("deprecation")
     private final Deserializer deserializer;
 
-    private final ColumnType[] types;
+    private final Type[] types;
     private final HiveType[] hiveTypes;
 
     private final StructObjectInspector rowInspector;
@@ -75,11 +81,19 @@ class GenericHiveRecordCursor<K, V extends Writable>
     private final boolean[] nulls;
 
     private final long totalBytes;
+    private final DateTimeZone timeZone;
+
     private long completedBytes;
     private Object rowData;
     private boolean closed;
 
-    public GenericHiveRecordCursor(RecordReader<K, V> recordReader, long totalBytes, Properties splitSchema, List<HivePartitionKey> partitionKeys, List<HiveColumnHandle> columns)
+    public GenericHiveRecordCursor(
+            RecordReader<K, V> recordReader,
+            long totalBytes,
+            Properties splitSchema,
+            List<HivePartitionKey> partitionKeys,
+            List<HiveColumnHandle> columns,
+            DateTimeZone timeZone)
     {
         checkNotNull(recordReader, "recordReader is null");
         checkArgument(totalBytes >= 0, "totalBytes is negative");
@@ -87,11 +101,13 @@ class GenericHiveRecordCursor<K, V extends Writable>
         checkNotNull(partitionKeys, "partitionKeys is null");
         checkNotNull(columns, "columns is null");
         checkArgument(!columns.isEmpty(), "columns is empty");
+        checkNotNull(timeZone, "timeZone is null");
 
         this.recordReader = recordReader;
         this.totalBytes = totalBytes;
         this.key = recordReader.createKey();
         this.value = recordReader.createValue();
+        this.timeZone = timeZone;
 
         try {
             this.deserializer = MetaStoreUtils.getDeserializer(null, splitSchema);
@@ -104,7 +120,7 @@ class GenericHiveRecordCursor<K, V extends Writable>
         int size = columns.size();
 
         String[] names = new String[size];
-        this.types = new ColumnType[size];
+        this.types = new Type[size];
         this.hiveTypes = new HiveType[size];
 
         this.structFields = new StructField[size];
@@ -146,36 +162,36 @@ class GenericHiveRecordCursor<K, V extends Writable>
 
                 byte[] bytes = partitionKey.getValue().getBytes(Charsets.UTF_8);
 
-                switch (types[columnIndex]) {
-                    case BOOLEAN:
-                        if (isTrue(bytes, 0, bytes.length)) {
-                            booleans[columnIndex] = true;
-                        }
-                        else if (isFalse(bytes, 0, bytes.length)) {
-                            booleans[columnIndex] = false;
-                        }
-                        else {
-                            String valueString = new String(bytes, Charsets.UTF_8);
-                            throw new IllegalArgumentException(String.format("Invalid partition value '%s' for BOOLEAN partition key %s", valueString, names[columnIndex]));
-                        }
-                        break;
-                    case LONG:
-                        if (bytes.length == 0) {
-                            throw new IllegalArgumentException(String.format("Invalid partition value '' for BIGINT partition key %s", names[columnIndex]));
-                        }
-                        longs[columnIndex] = parseLong(bytes, 0, bytes.length);
-                        break;
-                    case DOUBLE:
-                        if (bytes.length == 0) {
-                            throw new IllegalArgumentException(String.format("Invalid partition value '' for DOUBLE partition key %s", names[columnIndex]));
-                        }
-                        doubles[columnIndex] = parseDouble(bytes, 0, bytes.length);
-                        break;
-                    case STRING:
-                        strings[columnIndex] = Arrays.copyOf(bytes, bytes.length);
-                        break;
-                    default:
-                        throw new UnsupportedOperationException("Unsupported column type: " + types[columnIndex]);
+                Type type = types[columnIndex];
+                if (BOOLEAN.equals(type)) {
+                    if (isTrue(bytes, 0, bytes.length)) {
+                        booleans[columnIndex] = true;
+                    }
+                    else if (isFalse(bytes, 0, bytes.length)) {
+                        booleans[columnIndex] = false;
+                    }
+                    else {
+                        String valueString = new String(bytes, Charsets.UTF_8);
+                        throw new IllegalArgumentException(String.format("Invalid partition value '%s' for BOOLEAN partition key %s", valueString, names[columnIndex]));
+                    }
+                }
+                else if (BIGINT.equals(type)) {
+                    if (bytes.length == 0) {
+                        throw new IllegalArgumentException(String.format("Invalid partition value '' for BIGINT partition key %s", names[columnIndex]));
+                    }
+                    longs[columnIndex] = parseLong(bytes, 0, bytes.length);
+                }
+                else if (DOUBLE.equals(type)) {
+                    if (bytes.length == 0) {
+                        throw new IllegalArgumentException(String.format("Invalid partition value '' for DOUBLE partition key %s", names[columnIndex]));
+                    }
+                    doubles[columnIndex] = parseDouble(bytes, 0, bytes.length);
+                }
+                else if (VARCHAR.equals(type)) {
+                    strings[columnIndex] = Arrays.copyOf(bytes, bytes.length);
+                }
+                else {
+                    throw new UnsupportedOperationException("Unsupported column type: " + type);
                 }
             }
         }
@@ -207,7 +223,7 @@ class GenericHiveRecordCursor<K, V extends Writable>
     }
 
     @Override
-    public ColumnType getType(int field)
+    public Type getType(int field)
     {
         return types[field];
     }
@@ -241,7 +257,7 @@ class GenericHiveRecordCursor<K, V extends Writable>
     {
         checkState(!closed, "Cursor is closed");
 
-        validateType(fieldId, ColumnType.BOOLEAN);
+        validateType(fieldId, boolean.class);
         if (!loaded[fieldId]) {
             parseBooleanColumn(fieldId);
         }
@@ -273,7 +289,7 @@ class GenericHiveRecordCursor<K, V extends Writable>
     {
         checkState(!closed, "Cursor is closed");
 
-        validateType(fieldId, ColumnType.LONG);
+        validateType(fieldId, long.class);
         if (!loaded[fieldId]) {
             parseLongColumn(fieldId);
         }
@@ -295,15 +311,29 @@ class GenericHiveRecordCursor<K, V extends Writable>
         else {
             Object fieldValue = ((PrimitiveObjectInspector) fieldInspectors[column]).getPrimitiveJavaObject(fieldData);
             checkState(fieldValue != null, "fieldValue should not be null");
-            longs[column] = getLongOrTimestamp(fieldValue);
+            longs[column] = getLongOrTimestamp(fieldValue, timeZone);
             nulls[column] = false;
         }
     }
 
-    private static long getLongOrTimestamp(Object value)
+    private static long getLongOrTimestamp(Object value, DateTimeZone hiveTimeZone)
     {
         if (value instanceof Timestamp) {
-            return MILLISECONDS.toSeconds(((Timestamp) value).getTime());
+            // The Hive SerDe parses timestamps using the default time zone of
+            // this JVM, but the data might have been written using a different
+            // time zone. We need to convert it to the configured time zone.
+
+            // the timestamp that Hive parsed using the JVM time zone
+            long parsedJvmMillis = ((Timestamp) value).getTime();
+
+            // remove the JVM time zone correction from the timestamp
+            DateTimeZone jvmTimeZone = DateTimeZone.getDefault();
+            long hiveMillis = jvmTimeZone.convertUTCToLocal(parsedJvmMillis);
+
+            // convert to UTC using the real time zone for the underlying data
+            long utcMillis = hiveTimeZone.convertLocalToUTC(hiveMillis, false);
+
+            return utcMillis;
         }
         return ((Number) value).longValue();
     }
@@ -313,7 +343,7 @@ class GenericHiveRecordCursor<K, V extends Writable>
     {
         checkState(!closed, "Cursor is closed");
 
-        validateType(fieldId, ColumnType.DOUBLE);
+        validateType(fieldId, double.class);
         if (!loaded[fieldId]) {
             parseDoubleColumn(fieldId);
         }
@@ -345,7 +375,7 @@ class GenericHiveRecordCursor<K, V extends Writable>
     {
         checkState(!closed, "Cursor is closed");
 
-        validateType(fieldId, ColumnType.STRING);
+        validateType(fieldId, Slice.class);
         if (!loaded[fieldId]) {
             parseStringColumn(fieldId);
         }
@@ -398,27 +428,30 @@ class GenericHiveRecordCursor<K, V extends Writable>
 
     private void parseColumn(int column)
     {
-        switch (types[column]) {
-            case BOOLEAN:
-                parseBooleanColumn(column);
-                break;
-            case LONG:
-                parseLongColumn(column);
-                break;
-            case DOUBLE:
-                parseDoubleColumn(column);
-                break;
-            case STRING:
-                parseStringColumn(column);
-                break;
-            default:
-                throw new UnsupportedOperationException("Unsupported column type: " + types[column]);
+        Type type = types[column];
+        if (BOOLEAN.equals(type)) {
+            parseBooleanColumn(column);
+        }
+        else if (BIGINT.equals(type)) {
+            parseLongColumn(column);
+        }
+        else if (DOUBLE.equals(type)) {
+            parseDoubleColumn(column);
+        }
+        else if (VARCHAR.equals(type)) {
+            parseStringColumn(column);
+        }
+        else if (TIMESTAMP.equals(type)) {
+            parseLongColumn(column);
+        }
+        else {
+            throw new UnsupportedOperationException("Unsupported column type: " + type);
         }
     }
 
-    private void validateType(int fieldId, ColumnType type)
+    private void validateType(int fieldId, Class<?> type)
     {
-        if (types[fieldId] != type) {
+        if (!types[fieldId].getJavaType().equals(type)) {
             // we don't use Preconditions.checkArgument because it requires boxing fieldId, which affects inner loop performance
             throw new IllegalArgumentException(String.format("Expected field to be %s, actual %s (field %s)", type, types[fieldId], fieldId));
         }
