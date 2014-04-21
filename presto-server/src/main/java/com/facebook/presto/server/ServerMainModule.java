@@ -39,6 +39,7 @@ import com.facebook.presto.execution.TaskManagerConfig;
 import com.facebook.presto.failureDetector.FailureDetector;
 import com.facebook.presto.failureDetector.FailureDetectorModule;
 import com.facebook.presto.guice.AbstractConfigurationAwareModule;
+import com.facebook.presto.index.IndexManager;
 import com.facebook.presto.metadata.CatalogManager;
 import com.facebook.presto.metadata.CatalogManagerConfig;
 import com.facebook.presto.metadata.ColumnMetadataMapper;
@@ -61,6 +62,7 @@ import com.facebook.presto.operator.ForScheduler;
 import com.facebook.presto.operator.RecordSinkManager;
 import com.facebook.presto.operator.RecordSinkProvider;
 import com.facebook.presto.spi.ConnectorFactory;
+import com.facebook.presto.spi.ConnectorIndexResolver;
 import com.facebook.presto.spi.ConnectorRecordSinkProvider;
 import com.facebook.presto.spi.Split;
 import com.facebook.presto.spi.block.BlockEncoding.BlockEncodingFactory;
@@ -91,6 +93,7 @@ import com.facebook.presto.sql.tree.FunctionCall;
 import com.facebook.presto.sql.tree.Serialization.ExpressionDeserializer;
 import com.facebook.presto.sql.tree.Serialization.ExpressionSerializer;
 import com.facebook.presto.sql.tree.Serialization.FunctionCallDeserializer;
+import com.facebook.presto.type.ColorType;
 import com.facebook.presto.type.TypeDeserializer;
 import com.facebook.presto.type.TypeRegistry;
 import com.facebook.presto.util.Threads;
@@ -205,6 +208,10 @@ public class ServerMainModule
         jsonBinder(binder).addDeserializerBinding(Type.class).to(TypeDeserializer.class);
         newSetBinder(binder, Type.class);
 
+        // index manager
+        binder.bind(IndexManager.class).in(Scopes.SINGLETON);
+        newSetBinder(binder, ConnectorIndexResolver.class);
+
         // handle resolver
         binder.install(new HandleJsonModule());
 
@@ -300,6 +307,7 @@ public class ServerMainModule
         blockEncodingFactoryBinder.addBinding().toInstance(DictionaryBlockEncoding.FACTORY);
         blockEncodingFactoryBinder.addBinding().toInstance(SnappyBlockEncoding.FACTORY);
         blockEncodingFactoryBinder.addBinding().toInstance(HyperLogLogType.BLOCK_ENCODING_FACTORY);
+        blockEncodingFactoryBinder.addBinding().toInstance(ColorType.BLOCK_ENCODING_FACTORY);
 
         // thread visualizer
         binder.bind(ThreadResource.class).in(Scopes.SINGLETON);
