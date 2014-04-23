@@ -59,12 +59,12 @@ import com.google.common.collect.Maps;
 import com.google.common.collect.Ordering;
 import com.google.inject.Inject;
 import io.airlift.log.Logger;
+import io.airlift.slice.Slice;
 import io.airlift.units.DataSize;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.metastore.ProtectMode;
 import org.apache.hadoop.hive.metastore.TableType;
-import org.apache.hadoop.hive.metastore.Warehouse;
 import org.apache.hadoop.hive.metastore.api.Database;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
 import org.apache.hadoop.hive.metastore.api.MetaException;
@@ -85,7 +85,6 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -95,9 +94,9 @@ import java.util.concurrent.TimeUnit;
 
 import static com.facebook.presto.hive.HiveBucketing.HiveBucket;
 import static com.facebook.presto.hive.HiveBucketing.getHiveBucket;
+import static com.facebook.presto.hive.HiveColumnHandle.SAMPLE_WEIGHT_COLUMN_NAME;
 import static com.facebook.presto.hive.HiveColumnHandle.columnMetadataGetter;
 import static com.facebook.presto.hive.HiveColumnHandle.hiveColumnHandle;
-import static com.facebook.presto.hive.HiveColumnHandle.SAMPLE_WEIGHT_COLUMN_NAME;
 import static com.facebook.presto.hive.HivePartition.UNPARTITIONED_ID;
 import static com.facebook.presto.hive.HiveType.columnTypeToHiveType;
 import static com.facebook.presto.hive.HiveType.getHiveType;
@@ -118,6 +117,7 @@ import static com.google.common.base.Predicates.not;
 import static com.google.common.base.Strings.isNullOrEmpty;
 import static com.google.common.collect.Iterables.concat;
 import static com.google.common.collect.Iterables.transform;
+import static io.airlift.slice.Slices.utf8Slice;
 import static java.lang.Boolean.parseBoolean;
 import static java.lang.Double.parseDouble;
 import static java.lang.Long.parseLong;
@@ -125,6 +125,7 @@ import static java.lang.String.format;
 import static java.util.UUID.randomUUID;
 import static org.apache.hadoop.hive.metastore.ProtectMode.getProtectModeFromString;
 import static org.apache.hadoop.hive.metastore.Warehouse.makePartName;
+import static org.apache.hadoop.hive.metastore.Warehouse.makeSpecFromName;
 
 @SuppressWarnings("deprecation")
 public class HiveClient
@@ -676,8 +677,8 @@ public class HiveClient
                     Range range = Iterables.getOnlyElement(domain.getRanges());
                     if (range.isSingleValue()) {
                         Comparable<?> value = range.getLow().getValue();
-                        checkArgument(value instanceof Boolean || value instanceof String || value instanceof Double || value instanceof Long,
-                                "Only Boolean, String, Double and Long partition keys are supported");
+                        checkArgument(value instanceof Boolean || value instanceof Slice || value instanceof Double || value instanceof Long,
+                                "Only Boolean, Slice (UTF8 String), Double and Long partition keys are supported");
                         filterPrefix.add(value.toString());
                     }
                 }
@@ -905,9 +906,8 @@ public class HiveClient
                         return new HivePartition(tableName);
                     }
 
-                    LinkedHashMap<String, String> keys = Warehouse.makeSpecFromName(partitionId);
                     ImmutableMap.Builder<ColumnHandle, Comparable<?>> builder = ImmutableMap.builder();
-                    for (Entry<String, String> entry : keys.entrySet()) {
+                    for (Entry<String, String> entry : makeSpecFromName(partitionId).entrySet()) {
                         ColumnHandle columnHandle = columnsByName.get(entry.getKey());
                         checkArgument(columnHandle != null, "Invalid partition key %s in partition %s", entry.getKey(), partitionId);
                         checkArgument(columnHandle instanceof HiveColumnHandle, "columnHandle is not an instance of HiveColumnHandle");
@@ -943,7 +943,10 @@ public class HiveClient
                             }
                         }
                         else if (VARCHAR.equals(type)) {
-                            builder.put(columnHandle, value);
+                            builder.put(columnHandle, utf8Slice(value));
+                        }
+                        else {
+                            throw new IllegalArgumentException(format("Unsupported partition type [%s] for partition: %s", type, partitionId));
                         }
                     }
 
