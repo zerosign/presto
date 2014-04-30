@@ -13,12 +13,12 @@
  */
 package com.facebook.presto;
 
+import com.facebook.presto.connector.dual.DualConnector;
 import com.facebook.presto.connector.dual.DualMetadata;
 import com.facebook.presto.connector.dual.DualSplitManager;
 import com.facebook.presto.index.IndexManager;
 import com.facebook.presto.metadata.InMemoryNodeManager;
 import com.facebook.presto.metadata.MetadataManager;
-import com.facebook.presto.spi.ConnectorSplitManager;
 import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.RecordSet;
@@ -40,7 +40,6 @@ import com.facebook.presto.util.MaterializedRow;
 import com.google.common.base.Function;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableMultiset;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import io.airlift.log.Logger;
 import io.airlift.log.Logging;
@@ -67,7 +66,6 @@ import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.DateType.DATE;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.NullType.NULL;
 import static com.facebook.presto.spi.type.TimeType.TIME;
 import static com.facebook.presto.spi.type.TimeWithTimeZoneType.TIME_WITH_TIME_ZONE;
 import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
@@ -75,7 +73,7 @@ import static com.facebook.presto.spi.type.TimestampWithTimeZoneType.TIMESTAMP_W
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.tpch.TpchMetadata.TINY_SCHEMA_NAME;
 import static com.facebook.presto.tpch.TpchRecordSet.createTpchRecordSet;
-import static com.google.common.base.Charsets.UTF_8;
+import static com.facebook.presto.type.UnknownType.UNKNOWN;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static io.airlift.tpch.TpchTable.LINE_ITEM;
@@ -112,7 +110,7 @@ public abstract class AbstractTestQueryFramework
                 "  comment VARCHAR(79) NOT NULL\n" +
                 ")");
         handle.execute("CREATE INDEX custkey_index ON orders (custkey)");
-        TpchTableHandle ordersHandle = tpchMetadata.getTableHandle(new SchemaTableName(TINY_SCHEMA_NAME, ORDERS.getTableName()));
+        TpchTableHandle ordersHandle = tpchMetadata.getTableHandle(session, new SchemaTableName(TINY_SCHEMA_NAME, ORDERS.getTableName()));
         insertRows(tpchMetadata.getTableMetadata(ordersHandle), handle, createTpchRecordSet(ORDERS, ordersHandle.getScaleFactor()));
 
         handle.execute("CREATE TABLE lineitem (\n" +
@@ -134,7 +132,7 @@ public abstract class AbstractTestQueryFramework
                 "  comment VARCHAR(44) NOT NULL,\n" +
                 "  PRIMARY KEY (orderkey, linenumber)" +
                 ")");
-        TpchTableHandle lineItemHandle = tpchMetadata.getTableHandle(new SchemaTableName(TINY_SCHEMA_NAME, LINE_ITEM.getTableName()));
+        TpchTableHandle lineItemHandle = tpchMetadata.getTableHandle(session, new SchemaTableName(TINY_SCHEMA_NAME, LINE_ITEM.getTableName()));
         insertRows(tpchMetadata.getTableMetadata(lineItemHandle), handle, createTpchRecordSet(LINE_ITEM, lineItemHandle.getScaleFactor()));
 
         session = setUpQueryFramework();
@@ -314,7 +312,7 @@ public abstract class AbstractTestQueryFramework
                             row.add(timestampValue);
                         }
                     }
-                    else if (NULL.equals(type)) {
+                    else if (UNKNOWN.equals(type)) {
                         Object objectValue = resultSet.getObject(i);
                         checkState(resultSet.wasNull(), "Expected a null value, but got %s", objectValue);
                         row.add(null);
@@ -355,7 +353,7 @@ public abstract class AbstractTestQueryFramework
                         part.bind(column, cursor.getDouble(column));
                     }
                     else if (VARCHAR.equals(type)) {
-                        part.bind(column, new String(cursor.getString(column), UTF_8));
+                        part.bind(column, cursor.getSlice(column).toStringUtf8());
                     }
                 }
             }
@@ -391,8 +389,9 @@ public abstract class AbstractTestQueryFramework
     private QueryExplainer getQueryExplainer()
     {
         MetadataManager metadata = new MetadataManager(new FeaturesConfig().setExperimentalSyntaxEnabled(true), new TypeRegistry());
-        metadata.addInternalSchemaMetadata(MetadataManager.INTERNAL_CONNECTOR_ID, new DualMetadata());
-        SplitManager splitManager = new SplitManager(ImmutableSet.<ConnectorSplitManager>of(new DualSplitManager(new InMemoryNodeManager())));
+        metadata.addGlobalSchemaMetadata(DualConnector.CONNECTOR_ID, new DualMetadata());
+        SplitManager splitManager = new SplitManager();
+        splitManager.addConnectorSplitManager(DualConnector.CONNECTOR_ID, new DualSplitManager(new InMemoryNodeManager()));
         IndexManager indexManager = new IndexManager();
         FeaturesConfig featuresConfig = new FeaturesConfig().setExperimentalSyntaxEnabled(true);
         List<PlanOptimizer> optimizers = new PlanOptimizersFactory(metadata, splitManager, indexManager, featuresConfig).get();

@@ -13,7 +13,9 @@
  */
 package com.facebook.presto.sql.planner;
 
+import com.facebook.presto.block.BlockUtils;
 import com.facebook.presto.index.IndexManager;
+import com.facebook.presto.metadata.ColumnHandle;
 import com.facebook.presto.metadata.LocalStorageManager;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.Signature;
@@ -54,7 +56,6 @@ import com.facebook.presto.operator.WindowOperator.WindowOperatorFactory;
 import com.facebook.presto.operator.index.IndexLookupSourceSupplier;
 import com.facebook.presto.operator.index.IndexSourceOperator;
 import com.facebook.presto.operator.window.WindowFunction;
-import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.Index;
 import com.facebook.presto.spi.RecordSink;
 import com.facebook.presto.spi.Session;
@@ -805,11 +806,12 @@ public class LocalExecutionPlanner
 
             PageBuilder pageBuilder = new PageBuilder(outputTypes);
             for (List<Expression> row : node.getRows()) {
+                pageBuilder.declarePosition();
                 IdentityHashMap<Expression, Type> expressionTypes = getExpressionTypes(context.getSession(), metadata, ImmutableMap.<Symbol, Type>of(), ImmutableList.copyOf(row));
                 for (int i = 0; i < row.size(); i++) {
                     // evaluate the literal value
                     Object result = ExpressionInterpreter.expressionInterpreter(row.get(i), metadata, context.getSession(), expressionTypes).evaluate(new BlockCursor[0]);
-                    pageBuilder.getBlockBuilder(i).appendObject(result);
+                    BlockUtils.appendObject(pageBuilder.getBlockBuilder(i), result);
                 }
             }
 

@@ -14,8 +14,8 @@
 package com.facebook.presto.sql.planner.optimizations;
 
 import com.facebook.presto.index.IndexManager;
-import com.facebook.presto.spi.ColumnHandle;
-import com.facebook.presto.spi.ResolvedIndex;
+import com.facebook.presto.metadata.ColumnHandle;
+import com.facebook.presto.metadata.ResolvedIndex;
 import com.facebook.presto.spi.Session;
 import com.facebook.presto.spi.TupleDomain;
 import com.facebook.presto.sql.planner.DomainTranslator;
@@ -247,7 +247,7 @@ public class IndexJoinOptimizer
                     .toSet();
 
             checkState(node.getGeneratedPartitions().isPresent(), "Predicate should have generated partitions before this optimizer");
-            TupleDomain tupleDomain = node.getGeneratedPartitions().get().getTupleDomainInput();
+            TupleDomain<ColumnHandle> tupleDomain = node.getGeneratedPartitions().get().getTupleDomainInput();
             Optional<ResolvedIndex> optionalResolvedIndex = indexManager.resolveIndex(node.getTable(), lookupColumns, tupleDomain);
             if (!optionalResolvedIndex.isPresent()) {
                 // No index available, so give up by returning something

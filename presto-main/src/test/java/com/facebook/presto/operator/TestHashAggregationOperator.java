@@ -26,6 +26,7 @@ import com.facebook.presto.util.MaterializedResult;
 import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
+import io.airlift.slice.Slices;
 import io.airlift.units.DataSize;
 import io.airlift.units.DataSize.Unit;
 import org.testng.annotations.AfterMethod;
@@ -198,7 +199,7 @@ public class TestHashAggregationOperator
     public void testHashBuilderResize()
     {
         BlockBuilder builder = VARCHAR.createBlockBuilder(new BlockBuilderStatus());
-        builder.append(new String(new byte[200_000])); // this must be larger than DEFAULT_MAX_BLOCK_SIZE, 64K
+        builder.appendSlice(Slices.allocate(200_000)); // this must be larger than DEFAULT_MAX_BLOCK_SIZE, 64K
         builder.build();
 
         List<Page> input = rowPagesBuilder(VARCHAR)
@@ -229,7 +230,7 @@ public class TestHashAggregationOperator
     public void testHashBuilderResizeLimit()
     {
         BlockBuilder builder = VARCHAR.createBlockBuilder(new BlockBuilderStatus());
-        builder.append(new String(new byte[5_000_000])); // this must be larger than DEFAULT_MAX_BLOCK_SIZE, 64K
+        builder.appendSlice(Slices.allocate(5_000_000)); // this must be larger than DEFAULT_MAX_BLOCK_SIZE, 64K
         builder.build();
 
         List<Page> input = rowPagesBuilder(VARCHAR)
@@ -262,6 +263,7 @@ public class TestHashAggregationOperator
         // estimate the number of entries required to create 1.5 pages of results
         int fixedWidthSize = SIZE_OF_LONG + SIZE_OF_DOUBLE + SIZE_OF_DOUBLE;
         int multiSlicePositionCount = (int) (1.5 * BlockBuilderStatus.DEFAULT_MAX_PAGE_SIZE_IN_BYTES / fixedWidthSize);
+        multiSlicePositionCount = Math.min((int) (1.5 * BlockBuilderStatus.DEFAULT_MAX_BLOCK_SIZE_IN_BYTES / SIZE_OF_DOUBLE), multiSlicePositionCount);
 
         List<Page> input = rowPagesBuilder(BIGINT, BIGINT)
                 .addSequencePage(multiSlicePositionCount, 0, 0)

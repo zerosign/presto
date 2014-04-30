@@ -38,6 +38,8 @@ import org.joda.time.format.DateTimeFormat;
 import org.joda.time.format.DateTimeFormatter;
 import org.joda.time.format.DateTimeFormatterBuilder;
 
+import java.util.Locale;
+
 import static com.facebook.presto.operator.scalar.QuarterOfYearDateTimeField.QUARTER_OF_YEAR;
 import static com.facebook.presto.spi.type.DateTimeEncoding.packDateTimeWithZone;
 import static com.facebook.presto.spi.type.DateTimeEncoding.unpackMillisUtc;
@@ -70,6 +72,7 @@ public final class DateTimeFunctions
     private static final DateTimeField DAY_OF_YEAR = UTC_CHRONOLOGY.dayOfYear();
     private static final DateTimeField WEEK_OF_YEAR = UTC_CHRONOLOGY.weekOfWeekyear();
     private static final DateTimeField MONTH_OF_YEAR = UTC_CHRONOLOGY.monthOfYear();
+    private static final DateTimeField QUARTER = QUARTER_OF_YEAR.getField(UTC_CHRONOLOGY);
     private static final DateTimeField YEAR = UTC_CHRONOLOGY.year();
     private static final int MILLISECONDS_IN_SECOND = 1000;
     private static final int MILLISECONDS_IN_MINUTE = 60 * MILLISECONDS_IN_SECOND;
@@ -81,48 +84,6 @@ public final class DateTimeFunctions
 
     private DateTimeFunctions()
     {
-    }
-
-    @ScalarFunction("__to_time__")
-    @SqlType(TimeType.class)
-    public static long toTime(long time)
-    {
-        return time;
-    }
-
-    @ScalarFunction("__to_time_with_time_zone__")
-    @SqlType(TimeWithTimeZoneType.class)
-    public static long toTimeWithTimeZone(long timeWithTimeZone)
-    {
-        return timeWithTimeZone;
-    }
-
-    @ScalarFunction("__to_timestamp__")
-    @SqlType(TimestampType.class)
-    public static long toTimestamp(long timestamp)
-    {
-        return timestamp;
-    }
-
-    @ScalarFunction("__to_timestamp_with_time_zone__")
-    @SqlType(TimestampWithTimeZoneType.class)
-    public static long toTimestampWithTimeZone(long timestampWithTimeZone)
-    {
-        return timestampWithTimeZone;
-    }
-
-    @ScalarFunction("__to_interval_day_time__")
-    @SqlType(IntervalDayTimeType.class)
-    public static long toIntervalDayTime(long intervalDayTime)
-    {
-        return intervalDayTime;
-    }
-
-    @ScalarFunction("__to_interval_year_month__")
-    @SqlType(IntervalYearMonthType.class)
-    public static long toIntervalYearMonth(long intervalYearMonth)
-    {
-        return intervalYearMonth;
     }
 
     @Description("current date")
@@ -448,7 +409,10 @@ public final class DateTimeFunctions
     public static long parseDatetime(Session session, Slice datetime, Slice formatString)
     {
         String pattern = formatString.toString(Charsets.UTF_8);
-        DateTimeFormatter formatter = DateTimeFormat.forPattern(pattern).withChronology(getChronology(session.getTimeZoneKey())).withOffsetParsed();
+        DateTimeFormatter formatter = DateTimeFormat.forPattern(pattern)
+                .withChronology(getChronology(session.getTimeZoneKey()))
+                .withOffsetParsed()
+                .withLocale(session.getLocale());
 
         String datetimeString = datetime.toString(Charsets.UTF_8);
         DateTime dateTime = formatter.parseDateTime(datetimeString);
@@ -459,20 +423,22 @@ public final class DateTimeFunctions
     @ScalarFunction
     public static Slice formatDatetime(Session session, @SqlType(TimestampType.class) long timestamp, Slice formatString)
     {
-        return formatDatetime(getChronology(session.getTimeZoneKey()), timestamp, formatString);
+        return formatDatetime(getChronology(session.getTimeZoneKey()), session.getLocale(), timestamp, formatString);
     }
 
     @Description("formats the given time by the given format")
     @ScalarFunction("format_datetime")
-    public static Slice formatDatetimeWithTimeZone(@SqlType(TimestampWithTimeZoneType.class) long timestampWithTimeZone, Slice formatString)
+    public static Slice formatDatetimeWithTimeZone(Session session, @SqlType(TimestampWithTimeZoneType.class) long timestampWithTimeZone, Slice formatString)
     {
-        return formatDatetime(unpackChronology(timestampWithTimeZone), unpackMillisUtc(timestampWithTimeZone), formatString);
+        return formatDatetime(unpackChronology(timestampWithTimeZone), session.getLocale(), unpackMillisUtc(timestampWithTimeZone), formatString);
     }
 
-    private static Slice formatDatetime(ISOChronology chronology, long timestamp, Slice formatString)
+    private static Slice formatDatetime(ISOChronology chronology, Locale locale, long timestamp, Slice formatString)
     {
         String pattern = formatString.toString(Charsets.UTF_8);
-        DateTimeFormatter formatter = DateTimeFormat.forPattern(pattern).withChronology(chronology);
+        DateTimeFormatter formatter = DateTimeFormat.forPattern(pattern)
+                .withChronology(chronology)
+                .withLocale(locale);
 
         String datetimeString = formatter.print(timestamp);
         return Slices.wrappedBuffer(datetimeString.getBytes(Charsets.UTF_8));
@@ -481,18 +447,21 @@ public final class DateTimeFunctions
     @ScalarFunction
     public static Slice dateFormat(Session session, @SqlType(TimestampType.class) long timestamp, Slice formatString)
     {
-        return dateFormat(getChronology(session.getTimeZoneKey()), timestamp, formatString);
+        return dateFormat(getChronology(session.getTimeZoneKey()), session.getLocale(), timestamp, formatString);
     }
 
     @ScalarFunction("date_format")
-    public static Slice dateFormatWithTimeZone(@SqlType(TimestampWithTimeZoneType.class) long timestampWithTimeZone, Slice formatString)
+    public static Slice dateFormatWithTimeZone(Session session, @SqlType(TimestampWithTimeZoneType.class) long timestampWithTimeZone, Slice formatString)
     {
-        return dateFormat(unpackChronology(timestampWithTimeZone), unpackMillisUtc(timestampWithTimeZone), formatString);
+        return dateFormat(unpackChronology(timestampWithTimeZone), session.getLocale(), unpackMillisUtc(timestampWithTimeZone), formatString);
     }
 
-    private static Slice dateFormat(ISOChronology chronology, long timestamp, Slice formatString)
+    private static Slice dateFormat(ISOChronology chronology, Locale locale, long timestamp, Slice formatString)
     {
-        DateTimeFormatter formatter = DATETIME_FORMATTER_CACHE.get(formatString).withChronology(chronology);
+        DateTimeFormatter formatter = DATETIME_FORMATTER_CACHE.get(formatString)
+                .withChronology(chronology)
+                .withLocale(locale);
+
         return Slices.copiedBuffer(formatter.print(timestamp), Charsets.UTF_8);
     }
 
@@ -500,7 +469,10 @@ public final class DateTimeFunctions
     @SqlType(TimestampType.class)
     public static long dateParse(Session session, Slice dateTime, Slice formatString)
     {
-        DateTimeFormatter formatter = DATETIME_FORMATTER_CACHE.get(formatString).withChronology(getChronology(session.getTimeZoneKey()));
+        DateTimeFormatter formatter = DATETIME_FORMATTER_CACHE.get(formatString)
+                .withChronology(getChronology(session.getTimeZoneKey()))
+                .withLocale(session.getLocale());
+
         return formatter.parseMillis(dateTime.toString(Charsets.UTF_8));
     }
 
@@ -736,21 +708,21 @@ public final class DateTimeFunctions
     @ScalarFunction("quarter")
     public static long quarterFromTimestamp(Session session, @SqlType(TimestampType.class) long timestamp)
     {
-        return (getChronology(session.getTimeZoneKey()).monthOfYear().get(timestamp) / 4) + 1;
+        return QUARTER_OF_YEAR.getField(getChronology(session.getTimeZoneKey())).get(timestamp);
     }
 
     @Description("quarter of the year of the given timestamp")
     @ScalarFunction("quarter")
     public static long quarterFromTimestampWithTimeZone(@SqlType(TimestampWithTimeZoneType.class) long timestampWithTimeZone)
     {
-        return (unpackChronology(timestampWithTimeZone).monthOfYear().get(unpackMillisUtc(timestampWithTimeZone)) / 4) + 1;
+        return QUARTER_OF_YEAR.getField(unpackChronology(timestampWithTimeZone)).get(unpackMillisUtc(timestampWithTimeZone));
     }
 
     @Description("quarter of the year of the given date")
     @ScalarFunction("quarter")
     public static long quarterFromDate(@SqlType(DateType.class) long date)
     {
-        return (MONTH_OF_YEAR.get(date) / 4) + 1;
+        return QUARTER.get(date);
     }
 
     @Description("year of the given timestamp")

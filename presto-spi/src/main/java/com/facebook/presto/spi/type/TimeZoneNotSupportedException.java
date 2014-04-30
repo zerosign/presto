@@ -11,17 +11,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.facebook.presto.spi;
+package com.facebook.presto.spi.type;
 
-public interface Partition
+public class TimeZoneNotSupportedException
+        extends RuntimeException
 {
-    /**
-     * Get the unique id of this partition within the scope of the table.
-     */
-    String getPartitionId();
+    private final String zoneId;
 
-    /**
-     * Gets the TupleDomain that provides a bound on the tuples within this Partition.
-     */
-    TupleDomain getTupleDomain();
+    public TimeZoneNotSupportedException(String zoneId)
+    {
+        super("Time zone " + zoneId + " is not supported");
+        this.zoneId = zoneId;
+    }
+
+    public String getZoneId()
+    {
+        return zoneId;
+    }
 }

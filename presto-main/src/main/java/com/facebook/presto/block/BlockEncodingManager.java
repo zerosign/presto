@@ -14,7 +14,7 @@
 package com.facebook.presto.block;
 
 import com.facebook.presto.spi.block.BlockEncoding;
-import com.facebook.presto.spi.block.BlockEncoding.BlockEncodingFactory;
+import com.facebook.presto.spi.block.BlockEncodingFactory;
 import com.facebook.presto.spi.block.BlockEncodingSerde;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.base.Charsets;
@@ -31,7 +31,7 @@ import java.util.concurrent.ConcurrentMap;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 
-public class BlockEncodingManager
+public final class BlockEncodingManager
         implements BlockEncodingSerde
 {
     private final TypeManager typeManager;
@@ -73,13 +73,13 @@ public class BlockEncodingManager
     }
 
     @Override
-    public <T extends BlockEncoding> void writeBlockEncoding(SliceOutput output, T encoding)
+    public void writeBlockEncoding(SliceOutput output, BlockEncoding encoding)
     {
         // get the encoding name
         String encodingName = encoding.getName();
 
         // look up the encoding factory
-        BlockEncodingFactory<T> blockEncoding = (BlockEncodingFactory<T>) blockEncodings.get(encodingName);
+        BlockEncodingFactory<BlockEncoding> blockEncoding = (BlockEncodingFactory<BlockEncoding>) blockEncodings.get(encodingName);
         checkArgument(blockEncoding != null, "Unknown block encoding %s", encodingName);
 
         // write the name to the output
@@ -97,9 +97,9 @@ public class BlockEncodingManager
         return new String(bytes, Charsets.UTF_8);
     }
 
-    private static void writeLengthPrefixedString(SliceOutput output, String string)
+    private static void writeLengthPrefixedString(SliceOutput output, String value)
     {
-        byte[] bytes = string.getBytes(Charsets.UTF_8);
+        byte[] bytes = value.getBytes(Charsets.UTF_8);
         output.writeInt(bytes.length);
         output.writeBytes(bytes);
     }

@@ -15,23 +15,23 @@ package com.facebook.presto.spi;
 
 import java.util.Objects;
 
-public class ResolvedIndex
+public class ConnectorResolvedIndex
 {
-    private final IndexHandle indexHandle;
-    private final TupleDomain unresolvedTupleDomain;
+    private final ConnectorIndexHandle indexHandle;
+    private final TupleDomain<ConnectorColumnHandle> unresolvedTupleDomain;
 
-    public ResolvedIndex(IndexHandle indexHandle, TupleDomain unresolvedTupleDomain)
+    public ConnectorResolvedIndex(ConnectorIndexHandle indexHandle, TupleDomain<ConnectorColumnHandle> unresolvedTupleDomain)
     {
         this.indexHandle = Objects.requireNonNull(indexHandle, "indexHandle is null");
         this.unresolvedTupleDomain = Objects.requireNonNull(unresolvedTupleDomain, "unresolvedTupleDomain is null");
     }
 
-    public IndexHandle getIndexHandle()
+    public ConnectorIndexHandle getIndexHandle()
     {
         return indexHandle;
     }
 
-    public TupleDomain getUnresolvedTupleDomain()
+    public TupleDomain<ConnectorColumnHandle> getUnresolvedTupleDomain()
     {
         return unresolvedTupleDomain;
     }

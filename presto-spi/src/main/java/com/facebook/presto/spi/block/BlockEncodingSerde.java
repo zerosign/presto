@@ -18,7 +18,13 @@ import io.airlift.slice.SliceOutput;
 
 public interface BlockEncodingSerde
 {
+    /**
+     * Read a block encoding from the input.
+     */
     BlockEncoding readBlockEncoding(SliceInput input);
 
-    <T extends BlockEncoding> void writeBlockEncoding(SliceOutput output, T encoding);
+    /**
+     * Write a blockEncoding to the output.
+     */
+    void writeBlockEncoding(SliceOutput output, BlockEncoding encoding);
 }

@@ -17,10 +17,11 @@ import com.facebook.presto.hive.util.AsyncRecursiveWalker;
 import com.facebook.presto.hive.util.BoundedExecutor;
 import com.facebook.presto.hive.util.FileStatusCallback;
 import com.facebook.presto.hive.util.SuspendingExecutor;
+import com.facebook.presto.spi.ConnectorSplit;
+import com.facebook.presto.spi.ConnectorSplitSource;
 import com.facebook.presto.spi.HostAddress;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.Split;
-import com.facebook.presto.spi.SplitSource;
+import com.facebook.presto.spi.Session;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Optional;
 import com.google.common.base.Throwables;
@@ -75,7 +76,7 @@ import static com.google.common.base.Preconditions.checkState;
 
 class HiveSplitSourceProvider
 {
-    private static final Split FINISHED_MARKER = new Split()
+    private static final ConnectorSplit FINISHED_MARKER = new ConnectorSplit()
     {
         @Override
         public boolean isRemotelyAccessible()
@@ -110,6 +111,7 @@ class HiveSplitSourceProvider
     private final ClassLoader classLoader;
     private final DataSize maxSplitSize;
     private final int maxPartitionBatchSize;
+    private final Session session;
 
     HiveSplitSourceProvider(String connectorId,
             Table table,
@@ -123,7 +125,8 @@ class HiveSplitSourceProvider
             NamenodeStats namenodeStats,
             DirectoryLister directoryLister,
             Executor executor,
-            int maxPartitionBatchSize)
+            int maxPartitionBatchSize,
+            Session session)
     {
         this.connectorId = connectorId;
         this.table = table;
@@ -138,10 +141,11 @@ class HiveSplitSourceProvider
         this.namenodeStats = namenodeStats;
         this.directoryLister = directoryLister;
         this.executor = executor;
+        this.session = session;
         this.classLoader = Thread.currentThread().getContextClassLoader();
     }
 
-    public SplitSource get()
+    public ConnectorSplitSource get()
     {
         // Each iterator has its own bounded executor and can be independently suspended
         final SuspendingExecutor suspendingExecutor = new SuspendingExecutor(new BoundedExecutor(executor, maxThreads));
@@ -152,7 +156,7 @@ class HiveSplitSourceProvider
             public void run()
             {
                 try {
-                    loadPartitionSplits(hiveSplitSource, suspendingExecutor);
+                    loadPartitionSplits(hiveSplitSource, suspendingExecutor, session);
                 }
                 catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -162,7 +166,7 @@ class HiveSplitSourceProvider
         return hiveSplitSource;
     }
 
-    private void loadPartitionSplits(final HiveSplitSource hiveSplitSource, SuspendingExecutor suspendingExecutor)
+    private void loadPartitionSplits(final HiveSplitSource hiveSplitSource, SuspendingExecutor suspendingExecutor, final Session session)
             throws InterruptedException
     {
         final Semaphore semaphore = new Semaphore(maxPartitionBatchSize);
@@ -200,7 +204,8 @@ class HiveSplitSourceProvider
                                 split.getLength(),
                                 schema,
                                 partitionKeys,
-                                false));
+                                false,
+                                session));
                     }
                     continue;
                 }
@@ -213,7 +218,7 @@ class HiveSplitSourceProvider
                         BlockLocation[] blockLocations = fs.getFileBlockLocations(file, 0, file.getLen());
                         boolean splittable = isSplittable(inputFormat, fs, file.getPath());
 
-                        hiveSplitSource.addToQueue(createHiveSplits(partitionName, file, blockLocations, 0, file.getLen(), schema, partitionKeys, splittable));
+                        hiveSplitSource.addToQueue(createHiveSplits(partitionName, file, blockLocations, 0, file.getLen(), schema, partitionKeys, splittable, session));
                         continue;
                     }
                 }
@@ -231,7 +236,7 @@ class HiveSplitSourceProvider
                         try {
                             boolean splittable = isSplittable(inputFormat, file.getPath().getFileSystem(configuration), file.getPath());
 
-                            hiveSplitSource.addToQueue(createHiveSplits(partitionName, file, blockLocations, 0, file.getLen(), schema, partitionKeys, splittable));
+                            hiveSplitSource.addToQueue(createHiveSplits(partitionName, file, blockLocations, 0, file.getLen(), schema, partitionKeys, splittable, session));
                         }
                         catch (IOException e) {
                             hiveSplitSource.fail(e);
@@ -329,7 +334,8 @@ class HiveSplitSourceProvider
             long length,
             Properties schema,
             List<HivePartitionKey> partitionKeys,
-            boolean splittable)
+            boolean splittable,
+            Session session)
             throws IOException
     {
         ImmutableList.Builder<HiveSplit> builder = ImmutableList.builder();
@@ -357,7 +363,8 @@ class HiveSplitSourceProvider
                             chunkLength,
                             schema,
                             partitionKeys,
-                            addresses));
+                            addresses,
+                            session));
 
                     chunkOffset += chunkLength;
                 }
@@ -380,7 +387,8 @@ class HiveSplitSourceProvider
                     length,
                     schema,
                     partitionKeys,
-                    addresses));
+                    addresses,
+                    session));
         }
         return builder.build();
     }
@@ -396,10 +404,10 @@ class HiveSplitSourceProvider
 
     @VisibleForTesting
     static class HiveSplitSource
-            implements SplitSource
+            implements ConnectorSplitSource
     {
         private final String connectorId;
-        private final BlockingQueue<Split> queue = new LinkedBlockingQueue<>();
+        private final BlockingQueue<ConnectorSplit> queue = new LinkedBlockingQueue<>();
         private final AtomicInteger outstandingSplitCount = new AtomicInteger();
         private final AtomicReference<Throwable> throwable = new AtomicReference<>();
         private final int maxOutstandingSplits;
@@ -419,15 +427,15 @@ class HiveSplitSourceProvider
             return outstandingSplitCount.get();
         }
 
-        void addToQueue(Iterable<? extends Split> splits)
+        void addToQueue(Iterable<? extends ConnectorSplit> splits)
         {
-            for (Split split : splits) {
+            for (ConnectorSplit split : splits) {
                 addToQueue(split);
             }
         }
 
         @VisibleForTesting
-        void addToQueue(Split split)
+        void addToQueue(ConnectorSplit split)
         {
             if (throwable.get() == null) {
                 queue.add(split);
@@ -465,13 +473,13 @@ class HiveSplitSourceProvider
         }
 
         @Override
-        public List<Split> getNextBatch(int maxSize)
+        public List<ConnectorSplit> getNextBatch(int maxSize)
                 throws InterruptedException
         {
             // wait for at least one split and then take as may extra splits as possible
             // if an error has been registered, the take will succeed immediately because
             // will be at least one finished marker in the queue
-            List<Split> splits = new ArrayList<>(maxSize);
+            List<ConnectorSplit> splits = new ArrayList<>(maxSize);
             splits.add(queue.take());
             queue.drainTo(splits, maxSize - 1);
 

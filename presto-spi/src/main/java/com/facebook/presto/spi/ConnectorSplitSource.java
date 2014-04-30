@@ -15,11 +15,12 @@ package com.facebook.presto.spi;
 
 import java.util.List;
 
-public interface Split
+public interface ConnectorSplitSource
 {
-    boolean isRemotelyAccessible();
+    String getDataSourceName();
 
-    List<HostAddress> getAddresses();
+    List<ConnectorSplit> getNextBatch(int maxSize)
+            throws InterruptedException;
 
-    Object getInfo();
+    boolean isFinished();
 }

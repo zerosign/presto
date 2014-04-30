@@ -11,8 +11,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.facebook.presto.spi;
+package com.facebook.presto.operator;
 
-public interface TableHandle
+import com.facebook.presto.spi.PrestoException;
+
+import static com.facebook.presto.spi.StandardErrorCode.PAGE_TOO_LARGE;
+
+public class PageTooLargeException
+        extends PrestoException
 {
+    public PageTooLargeException()
+    {
+        super(PAGE_TOO_LARGE.toErrorCode(), "Remote page is too large");
+    }
 }

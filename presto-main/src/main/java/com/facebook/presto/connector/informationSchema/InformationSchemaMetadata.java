@@ -13,13 +13,14 @@
  */
 package com.facebook.presto.connector.informationSchema;
 
-import com.facebook.presto.spi.ColumnHandle;
+import com.facebook.presto.spi.ConnectorColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
+import com.facebook.presto.spi.ConnectorTableHandle;
 import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.ReadOnlyConnectorMetadata;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.SchemaTablePrefix;
-import com.facebook.presto.spi.TableHandle;
+import com.facebook.presto.spi.Session;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 
@@ -97,18 +98,7 @@ public class InformationSchemaMetadata
         this.catalogName = catalogName;
     }
 
-    @Override
-    public boolean canHandle(TableHandle tableHandle)
-    {
-        if (!(tableHandle instanceof InformationSchemaTableHandle)) {
-            return false;
-        }
-
-        InformationSchemaTableHandle handle = (InformationSchemaTableHandle) tableHandle;
-        return handle.getCatalogName().equals(catalogName) && TABLES.containsKey(handle.getSchemaTableName());
-    }
-
-    private InformationSchemaTableHandle checkTableHandle(TableHandle tableHandle)
+    private InformationSchemaTableHandle checkTableHandle(ConnectorTableHandle tableHandle)
     {
         checkNotNull(tableHandle, "tableHandle is null");
         checkArgument(tableHandle instanceof InformationSchemaTableHandle, "tableHandle is not an information schema table handle");
@@ -120,29 +110,29 @@ public class InformationSchemaMetadata
     }
 
     @Override
-    public List<String> listSchemaNames()
+    public List<String> listSchemaNames(Session session)
     {
         return ImmutableList.of(INFORMATION_SCHEMA);
     }
 
     @Override
-    public TableHandle getTableHandle(SchemaTableName tableName)
+    public ConnectorTableHandle getTableHandle(Session session, SchemaTableName tableName)
     {
         if (!TABLES.containsKey(tableName)) {
             return null;
         }
-        return new InformationSchemaTableHandle(catalogName, tableName.getSchemaName(), tableName.getTableName());
+        return new InformationSchemaTableHandle(session, catalogName, tableName.getSchemaName(), tableName.getTableName());
     }
 
     @Override
-    public ConnectorTableMetadata getTableMetadata(TableHandle tableHandle)
+    public ConnectorTableMetadata getTableMetadata(ConnectorTableHandle tableHandle)
     {
         InformationSchemaTableHandle informationSchemaTableHandle = checkTableHandle(tableHandle);
         return TABLES.get(informationSchemaTableHandle.getSchemaTableName());
     }
 
     @Override
-    public List<SchemaTableName> listTables(final String schemaNameOrNull)
+    public List<SchemaTableName> listTables(Session session, String schemaNameOrNull)
     {
         if (schemaNameOrNull == null) {
             return ImmutableList.copyOf(TABLES.keySet());
@@ -152,7 +142,7 @@ public class InformationSchemaMetadata
     }
 
     @Override
-    public ColumnHandle getColumnHandle(TableHandle tableHandle, String columnName)
+    public ConnectorColumnHandle getColumnHandle(ConnectorTableHandle tableHandle, String columnName)
     {
         InformationSchemaTableHandle informationSchemaTableHandle = checkTableHandle(tableHandle);
         ConnectorTableMetadata tableMetadata = TABLES.get(informationSchemaTableHandle.getSchemaTableName());
@@ -164,13 +154,13 @@ public class InformationSchemaMetadata
     }
 
     @Override
-    public ColumnHandle getSampleWeightColumnHandle(TableHandle tableHandle)
+    public ConnectorColumnHandle getSampleWeightColumnHandle(ConnectorTableHandle tableHandle)
     {
         return null;
     }
 
     @Override
-    public ColumnMetadata getColumnMetadata(TableHandle tableHandle, ColumnHandle columnHandle)
+    public ColumnMetadata getColumnMetadata(ConnectorTableHandle tableHandle, ConnectorColumnHandle columnHandle)
     {
         InformationSchemaTableHandle informationSchemaTableHandle = checkTableHandle(tableHandle);
         ConnectorTableMetadata tableMetadata = TABLES.get(informationSchemaTableHandle.getSchemaTableName());
@@ -184,7 +174,7 @@ public class InformationSchemaMetadata
     }
 
     @Override
-    public Map<String, ColumnHandle> getColumnHandles(TableHandle tableHandle)
+    public Map<String, ConnectorColumnHandle> getColumnHandles(ConnectorTableHandle tableHandle)
     {
         InformationSchemaTableHandle informationSchemaTableHandle = checkTableHandle(tableHandle);
 
@@ -194,7 +184,7 @@ public class InformationSchemaMetadata
     }
 
     @Override
-    public Map<SchemaTableName, List<ColumnMetadata>> listTableColumns(SchemaTablePrefix prefix)
+    public Map<SchemaTableName, List<ColumnMetadata>> listTableColumns(Session session, SchemaTablePrefix prefix)
     {
         checkNotNull(prefix, "prefix is null");
         ImmutableMap.Builder<SchemaTableName, List<ColumnMetadata>> builder = ImmutableMap.builder();

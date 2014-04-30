@@ -15,25 +15,26 @@ package com.facebook.presto.execution;
 
 import com.facebook.presto.OutputBuffers;
 import com.facebook.presto.UnpartitionedPagePartitionFunction;
+import com.facebook.presto.connector.dual.DualConnector;
 import com.facebook.presto.connector.dual.DualMetadata;
 import com.facebook.presto.connector.dual.DualSplit;
 import com.facebook.presto.execution.SharedBuffer.QueueState;
 import com.facebook.presto.execution.StateMachine.StateChangeListener;
 import com.facebook.presto.execution.TestSqlTaskManager.MockLocationFactory;
+import com.facebook.presto.metadata.ColumnHandle;
 import com.facebook.presto.metadata.InMemoryNodeManager;
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.metadata.NodeVersion;
 import com.facebook.presto.metadata.PrestoNode;
 import com.facebook.presto.metadata.QualifiedTableName;
+import com.facebook.presto.metadata.Split;
+import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.operator.TaskContext;
-import com.facebook.presto.spi.ColumnHandle;
+import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.FixedSplitSource;
 import com.facebook.presto.spi.HostAddress;
 import com.facebook.presto.spi.Node;
 import com.facebook.presto.spi.Session;
-import com.facebook.presto.spi.Split;
-import com.facebook.presto.spi.SplitSource;
-import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.planner.PlanFragment;
@@ -93,6 +94,7 @@ import static org.testng.Assert.fail;
 public class TestSqlStageExecution
 {
     public static final Session SESSION = new Session("user", "source", "catalog", "schema", UTC_KEY, Locale.ENGLISH, "address", "agent");
+
     MetadataManager metadata;
     LocationFactory locationFactory = new MockLocationFactory();
 
@@ -101,8 +103,7 @@ public class TestSqlStageExecution
             throws Exception
     {
         metadata = new MetadataManager(new FeaturesConfig(), new TypeRegistry());
-        metadata.addInternalSchemaMetadata(MetadataManager.INTERNAL_CONNECTOR_ID, new DualMetadata());
-
+        metadata.addGlobalSchemaMetadata(DualConnector.CONNECTOR_ID, new DualMetadata());
     }
 
     @Test
@@ -208,7 +209,7 @@ public class TestSqlStageExecution
         SqlStageExecution stageExecution = null;
         try {
             MetadataManager metadata = new MetadataManager(new FeaturesConfig(), new TypeRegistry());
-            metadata.addInternalSchemaMetadata(MetadataManager.INTERNAL_CONNECTOR_ID, new DualMetadata());
+            metadata.addGlobalSchemaMetadata(DualConnector.CONNECTOR_ID, new DualMetadata());
 
             StageExecutionPlan joinPlan = createJoinPlan("A", metadata);
 
@@ -313,12 +314,11 @@ public class TestSqlStageExecution
 
     private StageExecutionPlan createTableScanPlan(String planId, MetadataManager metadata, int splitCount)
     {
-        TableHandle tableHandle = metadata.getTableHandle(new QualifiedTableName("default", "default", DualMetadata.NAME)).get();
+        TableHandle tableHandle = metadata.getTableHandle(SESSION, new QualifiedTableName("default", "default", DualMetadata.NAME)).get();
         ColumnHandle columnHandle = metadata.getColumnHandle(tableHandle, DualMetadata.COLUMN_NAME).get();
         Symbol symbol = new Symbol(DualMetadata.COLUMN_NAME);
 
         // table scan with splitCount splits
-        Split split = new DualSplit(HostAddress.fromString("127.0.0.1"));
         PlanNodeId tableScanNodeId = new PlanNodeId(planId);
         PlanFragment testFragment = new PlanFragment(
                 new PlanFragmentId(planId),
@@ -335,11 +335,12 @@ public class TestSqlStageExecution
                 OutputPartitioning.NONE,
                 ImmutableList.<Symbol>of());
 
-        ImmutableList.Builder<Split> splits = ImmutableList.builder();
+        ImmutableList.Builder<ConnectorSplit> splits = ImmutableList.builder();
+
         for (int i = 0; i < splitCount; i++) {
             splits.add(new DualSplit(HostAddress.fromString("127.0.0.1")));
         }
-        SplitSource splitSource = new FixedSplitSource(null, splits.build());
+        SplitSource splitSource = new ConnectorAwareSplitSource(DualConnector.CONNECTOR_ID, new FixedSplitSource(null, splits.build()));
 
         return new StageExecutionPlan(testFragment,
                 Optional.of(splitSource),
@@ -437,7 +438,7 @@ public class TestSqlStageExecution
             }
 
             @Override
-            public void addSplits(PlanNodeId sourceId, Iterable<? extends Split> splits)
+            public void addSplits(PlanNodeId sourceId, Iterable<Split> splits)
             {
                 checkNotNull(splits, "splits is null");
                 for (Split split : splits) {

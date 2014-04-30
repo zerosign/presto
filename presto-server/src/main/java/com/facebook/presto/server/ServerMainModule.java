@@ -62,10 +62,9 @@ import com.facebook.presto.operator.ForScheduler;
 import com.facebook.presto.operator.RecordSinkManager;
 import com.facebook.presto.operator.RecordSinkProvider;
 import com.facebook.presto.spi.ConnectorFactory;
-import com.facebook.presto.spi.ConnectorIndexResolver;
 import com.facebook.presto.spi.ConnectorRecordSinkProvider;
-import com.facebook.presto.spi.Split;
-import com.facebook.presto.spi.block.BlockEncoding.BlockEncodingFactory;
+import com.facebook.presto.spi.ConnectorSplit;
+import com.facebook.presto.spi.block.BlockEncodingFactory;
 import com.facebook.presto.spi.block.BlockEncodingSerde;
 import com.facebook.presto.spi.type.BigintType;
 import com.facebook.presto.spi.type.BooleanType;
@@ -74,7 +73,6 @@ import com.facebook.presto.spi.type.DoubleType;
 import com.facebook.presto.spi.type.HyperLogLogType;
 import com.facebook.presto.spi.type.IntervalDayTimeType;
 import com.facebook.presto.spi.type.IntervalYearMonthType;
-import com.facebook.presto.spi.type.NullType;
 import com.facebook.presto.spi.type.TimeType;
 import com.facebook.presto.spi.type.TimeWithTimeZoneType;
 import com.facebook.presto.spi.type.TimestampType;
@@ -98,6 +96,7 @@ import com.facebook.presto.sql.tree.Serialization.FunctionCallDeserializer;
 import com.facebook.presto.type.ColorType;
 import com.facebook.presto.type.TypeDeserializer;
 import com.facebook.presto.type.TypeRegistry;
+import com.facebook.presto.type.UnknownType;
 import com.facebook.presto.util.Threads;
 import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableSet;
@@ -171,7 +170,7 @@ public class ServerMainModule
         bindConfig(binder).to(TaskManagerConfig.class);
 
         jsonCodecBinder(binder).bindJsonCodec(TaskInfo.class);
-        binder.bind(PagesMapper.class).in(Scopes.SINGLETON);
+        binder.bind(PagesResponseWriter.class).in(Scopes.SINGLETON);
 
         // exchange client
         binder.bind(new TypeLiteral<Supplier<ExchangeClient>>() {}).to(ExchangeClientFactory.class).in(Scopes.SINGLETON);
@@ -212,7 +211,6 @@ public class ServerMainModule
 
         // index manager
         binder.bind(IndexManager.class).in(Scopes.SINGLETON);
-        newSetBinder(binder, ConnectorIndexResolver.class);
 
         // handle resolver
         binder.install(new HandleJsonModule());
@@ -238,7 +236,7 @@ public class ServerMainModule
 
         // splits
         jsonCodecBinder(binder).bindJsonCodec(TaskUpdateRequest.class);
-        jsonCodecBinder(binder).bindJsonCodec(Split.class);
+        jsonCodecBinder(binder).bindJsonCodec(ConnectorSplit.class);
         jsonBinder(binder).addSerializerBinding(Slice.class).to(SliceSerializer.class);
         jsonBinder(binder).addDeserializerBinding(Slice.class).to(SliceDeserializer.class);
         jsonBinder(binder).addSerializerBinding(Expression.class).to(ExpressionSerializer.class);
@@ -293,9 +291,10 @@ public class ServerMainModule
         binder.bind(new TypeLiteral<List<PlanOptimizer>>() {}).toProvider(PlanOptimizersFactory.class).in(Scopes.SINGLETON);
 
         // block encodings
+        binder.bind(BlockEncodingManager.class).in(Scopes.SINGLETON);
         binder.bind(BlockEncodingSerde.class).to(BlockEncodingManager.class).in(Scopes.SINGLETON);
         Multibinder<BlockEncodingFactory<?>> blockEncodingFactoryBinder = newSetBinder(binder, new TypeLiteral<BlockEncodingFactory<?>>() {});
-        blockEncodingFactoryBinder.addBinding().toInstance(NullType.BLOCK_ENCODING_FACTORY);
+        blockEncodingFactoryBinder.addBinding().toInstance(UnknownType.BLOCK_ENCODING_FACTORY);
         blockEncodingFactoryBinder.addBinding().toInstance(BooleanType.BLOCK_ENCODING_FACTORY);
         blockEncodingFactoryBinder.addBinding().toInstance(BigintType.BLOCK_ENCODING_FACTORY);
         blockEncodingFactoryBinder.addBinding().toInstance(DoubleType.BLOCK_ENCODING_FACTORY);

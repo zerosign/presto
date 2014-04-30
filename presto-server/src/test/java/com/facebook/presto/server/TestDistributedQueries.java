@@ -23,9 +23,9 @@ import com.facebook.presto.metadata.AllNodes;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.QualifiedTableName;
 import com.facebook.presto.metadata.QualifiedTablePrefix;
+import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.server.testing.TestingPrestoServer;
 import com.facebook.presto.spi.Session;
-import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.tpch.SampledTpchPlugin;
 import com.facebook.presto.tpch.TpchMetadata;
@@ -37,6 +37,7 @@ import com.google.common.base.Joiner;
 import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.inject.Module;
 import io.airlift.http.client.AsyncHttpClient;
 import io.airlift.http.client.HttpClientConfig;
@@ -59,6 +60,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static com.facebook.presto.connector.informationSchema.InformationSchemaMetadata.INFORMATION_SCHEMA;
 import static com.facebook.presto.spi.Session.DEFAULT_CATALOG;
 import static com.facebook.presto.spi.Session.DEFAULT_SCHEMA;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
@@ -104,6 +106,15 @@ public class TestDistributedQueries
     private List<TestingPrestoServer> servers;
     private AsyncHttpClient httpClient;
     private TestingDiscoveryServer discoveryServer;
+
+    @Test
+    public void testShowSchemasFromOther()
+            throws Exception
+    {
+        MaterializedResult result = computeActual(format("SHOW SCHEMAS FROM tpch"));
+        ImmutableSet<String> schemaNames = ImmutableSet.copyOf(transform(result.getMaterializedRows(), onlyColumnGetter()));
+        assertTrue(schemaNames.containsAll(ImmutableSet.of(INFORMATION_SCHEMA, "sys", "tiny")));
+    }
 
     @Test(expectedExceptions = RuntimeException.class, expectedExceptionsMessageRegExp = "statement is too large \\(stack overflow during analysis\\)")
     public void testLargeQueryFailure()
@@ -214,7 +225,7 @@ public class TestDistributedQueries
         }
         finally {
             QualifiedTableName name = new QualifiedTableName(DEFAULT_CATALOG, DEFAULT_SCHEMA, table);
-            Optional<TableHandle> handle = coordinator.getMetadata().getTableHandle(name);
+            Optional<TableHandle> handle = coordinator.getMetadata().getTableHandle(SESSION, name);
             if (handle.isPresent()) {
                 coordinator.getMetadata().dropTable(handle.get());
             }
@@ -297,7 +308,7 @@ public class TestDistributedQueries
     private void distributeData(String catalog, String schema, ClientSession session)
             throws Exception
     {
-        for (QualifiedTableName table : coordinator.getMetadata().listTables(new QualifiedTablePrefix(catalog, schema))) {
+        for (QualifiedTableName table : coordinator.getMetadata().listTables(SESSION, new QualifiedTablePrefix(catalog, schema))) {
             if (table.getTableName().equalsIgnoreCase("dual")) {
                 continue;
             }
@@ -451,6 +462,9 @@ public class TestDistributedQueries
                     }
                     else if (TIMESTAMP_WITH_TIME_ZONE.equals(type)) {
                         row.add(new Timestamp(unpackMillisUtc(parseTimestampWithTimeZone((String) value))));
+                    }
+                    else {
+                        throw new AssertionError("unhandled type: " + type);
                     }
                 }
                 return new MaterializedRow(DEFAULT_PRECISION, row);

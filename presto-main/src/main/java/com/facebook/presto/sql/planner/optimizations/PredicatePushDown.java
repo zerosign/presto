@@ -13,10 +13,10 @@
  */
 package com.facebook.presto.sql.planner.optimizations;
 
+import com.facebook.presto.metadata.ColumnHandle;
 import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.spi.ColumnHandle;
-import com.facebook.presto.spi.Partition;
-import com.facebook.presto.spi.PartitionResult;
+import com.facebook.presto.metadata.Partition;
+import com.facebook.presto.metadata.PartitionResult;
 import com.facebook.presto.spi.TupleDomain;
 import com.facebook.presto.split.SplitManager;
 import com.facebook.presto.spi.Session;
@@ -763,7 +763,7 @@ public class PredicatePushDown
                     symbolAllocator.getTypes(),
                     node.getAssignments());
             Expression extractionRemainingExpression = extractionResult.getRemainingExpression();
-            TupleDomain tupleDomain = extractionResult.getTupleDomain();
+            TupleDomain<ColumnHandle> tupleDomain = extractionResult.getTupleDomain();
 
             if (node.getGeneratedPartitions().isPresent()) {
                 // Add back in the TupleDomain that was used to generate the previous set of Partitions if present
@@ -774,7 +774,7 @@ public class PredicatePushDown
 
             PartitionResult matchingPartitions = splitManager.getPartitions(node.getTable(), Optional.of(tupleDomain));
             List<Partition> partitions = matchingPartitions.getPartitions();
-            TupleDomain undeterminedTupleDomain = matchingPartitions.getUndeterminedTupleDomain();
+            TupleDomain<ColumnHandle> undeterminedTupleDomain = matchingPartitions.getUndeterminedTupleDomain();
 
             Expression unevaluatedDomainPredicate = DomainTranslator.toPredicate(
                     undeterminedTupleDomain,

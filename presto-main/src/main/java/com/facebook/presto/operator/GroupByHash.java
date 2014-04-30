@@ -77,11 +77,12 @@ public class GroupByHash
         value = new int[hashSize];
 
         groupAddress = new LongBigArray();
+        groupAddress.ensureCapacity(maxFill);
     }
 
     public long getEstimatedSize()
     {
-        return completedPagesMemorySize + pages.get(pages.size() - 1).getMemorySize() + sizeOf(key) + sizeOf(value);
+        return completedPagesMemorySize + pages.get(pages.size() - 1).getMemorySize() + sizeOf(key) + sizeOf(value) + groupAddress.sizeOf();
     }
 
     public List<Type> getTypes()
@@ -105,12 +106,6 @@ public class GroupByHash
     {
         int positionCount = page.getPositionCount();
 
-        int maxPossibleGroupId = nextGroupId + positionCount;
-        groupAddress.ensureCapacity(maxPossibleGroupId);
-        if (maxPossibleGroupId > maxFill) {
-            rehash(maxPossibleGroupId);
-        }
-
         // we know the exact size required for the block
         BlockBuilder blockBuilder = BIGINT.createFixedSizeBlockBuilder(positionCount);
 
@@ -127,10 +122,10 @@ public class GroupByHash
             }
 
             // get the group for the current row
-            int groupId = putIfAbsentInternal(currentRow);
+            int groupId = putIfAbsent(currentRow);
 
             // output the group id for this row
-            blockBuilder.append(groupId);
+            blockBuilder.appendLong(groupId);
         }
 
         RandomAccessBlock block = blockBuilder.build();
@@ -138,17 +133,6 @@ public class GroupByHash
     }
 
     public int putIfAbsent(BlockCursor[] cursors)
-    {
-        int maxPossibleGroupId = nextGroupId + cursors[0].getRemainingPositions() + 1;
-        groupAddress.ensureCapacity(maxPossibleGroupId);
-        if (maxPossibleGroupId > maxFill) {
-            rehash(maxPossibleGroupId);
-        }
-
-        return putIfAbsentInternal(cursors);
-    }
-
-    private int putIfAbsentInternal(BlockCursor[] cursors)
     {
         int hashPosition = ((int) Murmur3.hash64(hashCursor(cursors))) & mask;
 
@@ -195,6 +179,11 @@ public class GroupByHash
             pageBuilder = new PageBuilder(types);
             pages.add(pageBuilder);
         }
+
+        // increase capacity, if necessary
+        if (nextGroupId >= maxFill) {
+            rehash(maxFill * 2);
+        }
         return groupId;
     }
 
@@ -233,13 +222,14 @@ public class GroupByHash
         this.maxFill = maxFill(newSize, FILL_RATIO);
         this.key = newKey;
         this.value = newValue;
+        groupAddress.ensureCapacity(maxFill);
     }
 
     private static int hashCursor(BlockCursor... cursors)
     {
         int result = 0;
         for (BlockCursor cursor : cursors) {
-            result = result * 31 + cursor.calculateHashCode();
+            result = result * 31 + cursor.hash();
         }
         return result;
     }
@@ -307,7 +297,7 @@ public class GroupByHash
         {
             int result = 0;
             for (BlockBuilder channel : channels) {
-                result = 31 * result + channel.hashCode(position);
+                result = 31 * result + channel.hash(position);
             }
             return result;
         }
@@ -317,7 +307,7 @@ public class GroupByHash
             for (int i = 0; i < channels.size(); i++) {
                 BlockBuilder thisBlock = this.channels.get(i);
                 BlockBuilder thatBlock = that.channels.get(i);
-                if (!thisBlock.equals(thisPosition, thatBlock, thatPosition)) {
+                if (!thisBlock.equalTo(thisPosition, thatBlock, thatPosition)) {
                     return false;
                 }
             }
@@ -328,7 +318,7 @@ public class GroupByHash
         {
             for (int i = 0; i < channels.size(); i++) {
                 BlockBuilder thisBlock = this.channels.get(i);
-                if (!thisBlock.equals(position, row[i])) {
+                if (!thisBlock.equalTo(position, row[i])) {
                     return false;
                 }
             }

@@ -248,6 +248,33 @@ public class TestUnixTimeFunctions
         assertFunction("extract(month FROM " + DATE_LITERAL + ")", 8);
         assertFunction("extract(quarter FROM " + DATE_LITERAL + ")", 3);
         assertFunction("extract(year FROM " + DATE_LITERAL + ")", 2001);
+
+        assertFunction("extract(quarter FROM DATE '2001-01-01')", 1);
+        assertFunction("extract(quarter FROM DATE '2001-03-31')", 1);
+        assertFunction("extract(quarter FROM DATE '2001-04-01')", 2);
+        assertFunction("extract(quarter FROM DATE '2001-06-30')", 2);
+        assertFunction("extract(quarter FROM DATE '2001-07-01')", 3);
+        assertFunction("extract(quarter FROM DATE '2001-09-30')", 3);
+        assertFunction("extract(quarter FROM DATE '2001-10-01')", 4);
+        assertFunction("extract(quarter FROM DATE '2001-12-31')", 4);
+
+        assertFunction("extract(quarter FROM TIMESTAMP '2001-01-01 00:00:00.000')", 1);
+        assertFunction("extract(quarter FROM TIMESTAMP '2001-03-31 23:59:59.999')", 1);
+        assertFunction("extract(quarter FROM TIMESTAMP '2001-04-01 00:00:00.000')", 2);
+        assertFunction("extract(quarter FROM TIMESTAMP '2001-06-30 23:59:59.999')", 2);
+        assertFunction("extract(quarter FROM TIMESTAMP '2001-07-01 00:00:00.000')", 3);
+        assertFunction("extract(quarter FROM TIMESTAMP '2001-09-30 23:59:59.999')", 3);
+        assertFunction("extract(quarter FROM TIMESTAMP '2001-10-01 00:00:00.000')", 4);
+        assertFunction("extract(quarter FROM TIMESTAMP '2001-12-31 23:59:59.999')", 4);
+
+        assertFunction("extract(quarter FROM TIMESTAMP '2001-01-01 00:00:00.000 +06:00')", 1);
+        assertFunction("extract(quarter FROM TIMESTAMP '2001-03-31 23:59:59.999 +06:00')", 1);
+        assertFunction("extract(quarter FROM TIMESTAMP '2001-04-01 00:00:00.000 +06:00')", 2);
+        assertFunction("extract(quarter FROM TIMESTAMP '2001-06-30 23:59:59.999 +06:00')", 2);
+        assertFunction("extract(quarter FROM TIMESTAMP '2001-07-01 00:00:00.000 +06:00')", 3);
+        assertFunction("extract(quarter FROM TIMESTAMP '2001-09-30 23:59:59.999 +06:00')", 3);
+        assertFunction("extract(quarter FROM TIMESTAMP '2001-10-01 00:00:00.000 +06:00')", 4);
+        assertFunction("extract(quarter FROM TIMESTAMP '2001-12-31 23:59:59.999 +06:00')", 4);
     }
 
     @Test
@@ -583,6 +610,38 @@ public class TestUnixTimeFunctions
         assertFunction("date_parse('abc 2013-05-17 fff 23:35:10 xyz', 'abc %Y-%m-%d fff %H:%i:%s xyz')", toTimestamp(new DateTime(2013, 5, 17, 23, 35, 10, 0, DATE_TIME_ZONE)));
 
         assertFunction("date_parse('2013 14', '%Y %y')", toTimestamp(new DateTime(2014, 1, 1, 0, 0, 0, 0, DATE_TIME_ZONE)));
+    }
+
+    @Test
+    public void testLocale()
+    {
+        Locale locale = Locale.JAPANESE;
+        session = new Session("user", "test", DEFAULT_CATALOG, DEFAULT_SCHEMA, TIME_ZONE_KEY, locale, null, null);
+
+        functionAssertions = new FunctionAssertions(session);
+
+        String dateTimeLiteral = "TIMESTAMP '2001-01-09 13:04:05.321'";
+
+        assertFunction("date_format(" + dateTimeLiteral + ", '%a')", "火");
+        assertFunction("date_format(" + dateTimeLiteral + ", '%W')", "火曜日");
+        assertFunction("date_format(" + dateTimeLiteral + ", '%p')", "午後");
+        assertFunction("date_format(" + dateTimeLiteral + ", '%r')", "01:04:05 午後");
+        assertFunction("date_format(" + dateTimeLiteral + ", '%b')", "1");
+        assertFunction("date_format(" + dateTimeLiteral + ", '%M')", "1月");
+
+        assertFunction("format_datetime(" + dateTimeLiteral + ", 'EEE')", "火");
+        assertFunction("format_datetime(" + dateTimeLiteral + ", 'EEEE')", "火曜日");
+        assertFunction("format_datetime(" + dateTimeLiteral + ", 'a')", "午後");
+        assertFunction("format_datetime(" + dateTimeLiteral + ", 'MMM')", "1");
+        assertFunction("format_datetime(" + dateTimeLiteral + ", 'MMMM')", "1月");
+
+        assertFunction("date_parse('2013-05-17 12:35:10 午後', '%Y-%m-%d %h:%i:%s %p')", toTimestamp(new DateTime(2013, 5, 17, 12, 35, 10, 0, DATE_TIME_ZONE)));
+        assertFunction("date_parse('2013-05-17 12:35:10 午前', '%Y-%m-%d %h:%i:%s %p')", toTimestamp(new DateTime(2013, 5, 17, 0, 35, 10, 0, DATE_TIME_ZONE)));
+
+        assertFunction("parse_datetime('2013-05-17 12:35:10 午後', 'yyyy-MM-dd hh:mm:ss a')",
+                toTimestampWithTimeZone(new DateTime(2013, 5, 17, 12, 35, 10, 0, DATE_TIME_ZONE)));
+        assertFunction("parse_datetime('2013-05-17 12:35:10 午前', 'yyyy-MM-dd hh:mm:ss aaa')",
+                toTimestampWithTimeZone(new DateTime(2013, 5, 17, 0, 35, 10, 0, DATE_TIME_ZONE)));
     }
 
     private void assertFunction(String projection, Object expected)

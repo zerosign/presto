@@ -15,7 +15,7 @@ package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.MetadataManager;
-import com.facebook.presto.spi.ColumnHandle;
+import com.facebook.presto.metadata.ColumnHandle;
 import com.facebook.presto.spi.Domain;
 import com.facebook.presto.spi.Range;
 import com.facebook.presto.spi.Session;
@@ -77,19 +77,19 @@ public class TestDomainTranslator
     private static final Session SESSION = new Session("user", "source", "catalog", "schema", UTC_KEY, Locale.ENGLISH, "address", "agent");
 
     private static final Symbol A = new Symbol("a");
-    private static final ColumnHandle ACH = new TestingColumnHandle(A);
+    private static final ColumnHandle ACH = newColumnHandle("a");
     private static final Symbol B = new Symbol("b");
-    private static final ColumnHandle BCH = new TestingColumnHandle(B);
+    private static final ColumnHandle BCH = newColumnHandle("b");
     private static final Symbol C = new Symbol("c");
-    private static final ColumnHandle CCH = new TestingColumnHandle(C);
+    private static final ColumnHandle CCH = newColumnHandle("c");
     private static final Symbol D = new Symbol("d");
-    private static final ColumnHandle DCH = new TestingColumnHandle(D);
+    private static final ColumnHandle DCH = newColumnHandle("d");
     private static final Symbol E = new Symbol("e");
-    private static final ColumnHandle ECH = new TestingColumnHandle(E);
+    private static final ColumnHandle ECH = newColumnHandle("e");
     private static final Symbol F = new Symbol("f");
-    private static final ColumnHandle FCH = new TestingColumnHandle(F);
+    private static final ColumnHandle FCH = newColumnHandle("f");
     private static final Symbol G = new Symbol("g");
-    private static final ColumnHandle GCH = new TestingColumnHandle(G);
+    private static final ColumnHandle GCH = newColumnHandle("g");
 
     private static final Map<Symbol, Type> TYPES = ImmutableMap.<Symbol, Type>builder()
             .put(A, BIGINT)
@@ -115,7 +115,7 @@ public class TestDomainTranslator
     public void testNoneRoundTrip()
             throws Exception
     {
-        TupleDomain tupleDomain = TupleDomain.none();
+        TupleDomain<ColumnHandle> tupleDomain = TupleDomain.none();
         ExtractionResult result = fromPredicate(MANAGER, SESSION, toPredicate(tupleDomain, COLUMN_HANDLES.inverse(), TYPES), TYPES, COLUMN_HANDLES);
         Assert.assertEquals(result.getRemainingExpression(), TRUE_LITERAL);
         Assert.assertEquals(result.getTupleDomain(), tupleDomain);
@@ -125,7 +125,7 @@ public class TestDomainTranslator
     public void testAllRoundTrip()
             throws Exception
     {
-        TupleDomain tupleDomain = TupleDomain.all();
+        TupleDomain<ColumnHandle> tupleDomain = TupleDomain.all();
         ExtractionResult result = fromPredicate(MANAGER, SESSION, toPredicate(tupleDomain, COLUMN_HANDLES.inverse(), TYPES), TYPES, COLUMN_HANDLES);
         Assert.assertEquals(result.getRemainingExpression(), TRUE_LITERAL);
         Assert.assertEquals(result.getTupleDomain(), tupleDomain);
@@ -135,7 +135,7 @@ public class TestDomainTranslator
     public void testRoundTrip()
             throws Exception
     {
-        TupleDomain tupleDomain = withColumnDomains(ImmutableMap.<ColumnHandle, Domain>builder()
+        TupleDomain<ColumnHandle> tupleDomain = withColumnDomains(ImmutableMap.<ColumnHandle, Domain>builder()
                 .put(ACH, Domain.singleValue(1L))
                 .put(BCH, Domain.onlyNull(Double.class))
                 .put(CCH, Domain.notNull(Slice.class))
@@ -154,7 +154,7 @@ public class TestDomainTranslator
     public void testToPredicateNone()
             throws Exception
     {
-        TupleDomain tupleDomain = withColumnDomains(ImmutableMap.<ColumnHandle, Domain>builder()
+        TupleDomain<ColumnHandle> tupleDomain = withColumnDomains(ImmutableMap.<ColumnHandle, Domain>builder()
                 .put(ACH, Domain.singleValue(1L))
                 .put(BCH, Domain.onlyNull(Double.class))
                 .put(CCH, Domain.notNull(Slice.class))
@@ -168,7 +168,7 @@ public class TestDomainTranslator
     public void testToPredicateAllIgnored()
             throws Exception
     {
-        TupleDomain tupleDomain = withColumnDomains(ImmutableMap.<ColumnHandle, Domain>builder()
+        TupleDomain<ColumnHandle> tupleDomain = withColumnDomains(ImmutableMap.<ColumnHandle, Domain>builder()
                 .put(ACH, Domain.singleValue(1L))
                 .put(BCH, Domain.onlyNull(Double.class))
                 .put(CCH, Domain.notNull(Slice.class))
@@ -188,7 +188,7 @@ public class TestDomainTranslator
     public void testToPredicate()
             throws Exception
     {
-        TupleDomain tupleDomain;
+        TupleDomain<ColumnHandle> tupleDomain;
 
         tupleDomain = withColumnDomains(ImmutableMap.<ColumnHandle, Domain>of(ACH, Domain.notNull(Long.class)));
         Assert.assertEquals(toPredicate(tupleDomain, COLUMN_HANDLES.inverse(), TYPES), isNotNull(A));
@@ -925,6 +925,11 @@ public class TestDomainTranslator
         result = fromPredicate(MANAGER, SESSION, originalExpression, TYPES, COLUMN_HANDLES);
         Assert.assertEquals(result.getRemainingExpression(), TRUE_LITERAL);
         Assert.assertTrue(result.getTupleDomain().isNone());
+    }
+
+    private static ColumnHandle newColumnHandle(String name)
+    {
+        return new ColumnHandle("test", new TestingColumnHandle(name));
     }
 
     private static Expression unprocessableExpression1(Symbol symbol)

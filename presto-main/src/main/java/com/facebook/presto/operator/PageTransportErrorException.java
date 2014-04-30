@@ -11,14 +11,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.facebook.presto.serde;
+package com.facebook.presto.operator;
 
-import com.facebook.presto.operator.Page;
+import com.facebook.presto.spi.PrestoException;
 
-public interface PagesWriter
+import static com.facebook.presto.spi.StandardErrorCode.PAGE_TRANSPORT_ERROR;
+
+public class PageTransportErrorException
+        extends PrestoException
 {
-    /**
-     * Appends the specified page to this serialization
-     */
-    PagesWriter append(Page page);
+    public PageTransportErrorException(String message)
+    {
+        super(PAGE_TRANSPORT_ERROR.toErrorCode(), message);
+    }
 }

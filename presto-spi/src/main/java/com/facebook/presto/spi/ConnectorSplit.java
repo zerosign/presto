@@ -11,21 +11,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.facebook.presto.spi.type;
+package com.facebook.presto.spi;
 
-public class TimeZoneNotSupported
-        extends RuntimeException
+import java.util.List;
+
+public interface ConnectorSplit
 {
-    private final String zoneId;
+    boolean isRemotelyAccessible();
 
-    public TimeZoneNotSupported(String zoneId)
-    {
-        super("Time zone " + zoneId + " is not supported");
-        this.zoneId = zoneId;
-    }
+    List<HostAddress> getAddresses();
 
-    public String getZoneId()
-    {
-        return zoneId;
-    }
+    Object getInfo();
 }
