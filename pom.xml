@@ -10,7 +10,7 @@
 
     <groupId>com.facebook.presto</groupId>
     <artifactId>presto-root</artifactId>
-    <version>0.66-SNAPSHOT</version>
+    <version>0.66</version>
     <packaging>pom</packaging>
 
     <name>presto-root</name>
@@ -30,7 +30,7 @@
     <scm>
         <connection>scm:git:git://github.com/facebook/presto.git</connection>
         <url>https://github.com/facebook/presto</url>
-        <tag>HEAD</tag>
+        <tag>0.66</tag>
     </scm>
 
     <properties>
@@ -40,7 +40,7 @@
         <air.check.skip-license>false</air.check.skip-license>
 
         <dep.antlr.version>3.4</dep.antlr.version>
-        <dep.airlift.version>0.88-SNAPSHOT</dep.airlift.version>
+        <dep.airlift.version>0.88</dep.airlift.version>
         <dep.packaging.version>${dep.airlift.version}</dep.packaging.version>
 
         <cli.skip-execute>true</cli.skip-execute>
@@ -57,6 +57,7 @@
         <module>presto-hive-hadoop1</module>
         <module>presto-hive-hadoop2</module>
         <module>presto-hive-cdh4</module>
+        <module>presto-hive-cdh5</module>
         <module>presto-example-http</module>
         <module>presto-tpch</module>
         <module>presto-client</module>

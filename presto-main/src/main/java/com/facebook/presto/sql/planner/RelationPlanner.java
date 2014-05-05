@@ -16,7 +16,7 @@ package com.facebook.presto.sql.planner;
 import com.facebook.presto.metadata.ColumnHandle;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.Signature;
-import com.facebook.presto.spi.Session;
+import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.block.BlockCursor;
 import com.facebook.presto.spi.type.BigintType;
 import com.facebook.presto.metadata.TableHandle;
@@ -26,6 +26,7 @@ import com.facebook.presto.sql.analyzer.Field;
 import com.facebook.presto.sql.analyzer.FieldOrExpression;
 import com.facebook.presto.sql.analyzer.SemanticException;
 import com.facebook.presto.sql.analyzer.TupleDescriptor;
+import com.facebook.presto.sql.planner.optimizations.CanonicalizeExpressions;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.MaterializeSampleNode;
@@ -42,7 +43,6 @@ import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.FunctionCall;
 import com.facebook.presto.sql.tree.InPredicate;
 import com.facebook.presto.sql.tree.Join;
-import com.facebook.presto.sql.tree.Literal;
 import com.facebook.presto.sql.tree.QualifiedNameReference;
 import com.facebook.presto.sql.tree.Query;
 import com.facebook.presto.sql.tree.QuerySpecification;
@@ -81,9 +81,9 @@ class RelationPlanner
     private final SymbolAllocator symbolAllocator;
     private final PlanNodeIdAllocator idAllocator;
     private final Metadata metadata;
-    private final Session session;
+    private final ConnectorSession session;
 
-    RelationPlanner(Analysis analysis, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator, Metadata metadata, Session session)
+    RelationPlanner(Analysis analysis, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator, Metadata metadata, ConnectorSession session)
     {
         Preconditions.checkNotNull(analysis, "analysis is null");
         Preconditions.checkNotNull(symbolAllocator, "symbolAllocator is null");
@@ -276,11 +276,15 @@ class RelationPlanner
         return new RelationPlan(valuesNode, descriptor, outputSymbolsBuilder.build());
     }
 
-    private Literal evaluateConstantExpression(final Expression expression)
+    private Expression evaluateConstantExpression(final Expression expression)
     {
         try {
+            // expressionInterpreter/optimizer only understands a subset of expression types
+            // TODO: remove this when the new expression tree is implemented
+            Expression canonicalized = CanonicalizeExpressions.canonicalizeExpression(expression);
+
             // verify the expression is constant (has no inputs)
-            ExpressionInterpreter.expressionOptimizer(expression, metadata, session, analysis.getTypes()).optimize(new SymbolResolver() {
+            ExpressionInterpreter.expressionOptimizer(canonicalized, metadata, session, analysis.getTypes()).optimize(new SymbolResolver() {
                 @Override
                 public Object getValue(Symbol symbol)
                 {
@@ -289,11 +293,10 @@ class RelationPlanner
             });
 
             // evaluate the expression
-            Object result = ExpressionInterpreter.expressionInterpreter(expression, metadata, session, analysis.getTypes()).evaluate(new BlockCursor[0]);
+            Object result = ExpressionInterpreter.expressionInterpreter(canonicalized, metadata, session, analysis.getTypes()).evaluate(new BlockCursor[0]);
             checkState(!(result instanceof Expression), "Expression interpreter returned an unresolved expression");
 
-            // convert result to a literal
-            return (Literal) LiteralInterpreter.toExpression(result, analysis.getType(expression));
+            return LiteralInterpreter.toExpression(result, analysis.getType(expression));
         }
         catch (Exception e) {
             throw new SemanticException(EXPRESSION_NOT_CONSTANT, expression, "Error evaluating constant expression: %s", e.getMessage());

@@ -13,7 +13,7 @@
  */
 package com.facebook.presto.sql.planner.optimizations;
 
-import com.facebook.presto.spi.Session;
+import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.planner.PlanNodeIdAllocator;
 import com.facebook.presto.sql.planner.Symbol;
@@ -56,7 +56,7 @@ public class CanonicalizeExpressions
     }
 
     @Override
-    public PlanNode optimize(PlanNode plan, Session session, Map<Symbol, Type> types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator)
+    public PlanNode optimize(PlanNode plan, ConnectorSession session, Map<Symbol, Type> types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator)
     {
         checkNotNull(plan, "plan is null");
         checkNotNull(session, "session is null");
@@ -152,7 +152,7 @@ public class CanonicalizeExpressions
                 case LOCALTIME:
                     return new FunctionCall(new QualifiedName("localtime"), ImmutableList.<Expression>of());
                 case TIMESTAMP:
-                    return new FunctionCall(new QualifiedName("now"), ImmutableList.<Expression>of());
+                    return new FunctionCall(new QualifiedName("current_timestamp"), ImmutableList.<Expression>of());
                 case LOCALTIMESTAMP:
                     return new FunctionCall(new QualifiedName("localtimestamp"), ImmutableList.<Expression>of());
                 default:

@@ -13,8 +13,8 @@
  */
 package com.facebook.presto.operator.scalar;
 
+import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.Session;
 import com.facebook.presto.spi.type.SqlDate;
 import com.facebook.presto.spi.type.SqlTime;
 import com.facebook.presto.spi.type.SqlTimeWithTimeZone;
@@ -31,8 +31,6 @@ import org.testng.annotations.Test;
 import java.util.Locale;
 import java.util.TimeZone;
 
-import static com.facebook.presto.spi.Session.DEFAULT_CATALOG;
-import static com.facebook.presto.spi.Session.DEFAULT_SCHEMA;
 import static com.facebook.presto.spi.type.TimeZoneKey.getTimeZoneKey;
 import static com.facebook.presto.spi.type.TimeZoneKey.getTimeZoneKeyForOffset;
 import static com.facebook.presto.util.DateTimeZoneIndex.getDateTimeZone;
@@ -45,7 +43,7 @@ import static org.joda.time.Weeks.weeksBetween;
 import static org.joda.time.Years.yearsBetween;
 import static org.testng.Assert.assertEquals;
 
-public class TestUnixTimeFunctions
+public class TestDateTimeFunctions
 {
     private static final TimeZoneKey TIME_ZONE_KEY = getTimeZoneKey("Asia/Kathmandu");
     private static final DateTimeZone DATE_TIME_ZONE = getDateTimeZone(TIME_ZONE_KEY);
@@ -66,13 +64,13 @@ public class TestUnixTimeFunctions
     private static final String WEIRD_TIMESTAMP_LITERAL = "TIMESTAMP '2001-08-22 03:04:05.321 +07:09'";
 
     private static final TimeZoneKey WEIRD_TIME_ZONE_KEY = getTimeZoneKeyForOffset(7 * 60 + 9);
-    private Session session;
+    private ConnectorSession session;
     private FunctionAssertions functionAssertions;
 
     @BeforeClass
     public void setUp()
     {
-        session = new Session("user", "test", DEFAULT_CATALOG, DEFAULT_SCHEMA, TIME_ZONE_KEY, Locale.ENGLISH, null, null);
+        session = new ConnectorSession("user", "test", "catalog", "schema", TIME_ZONE_KEY, Locale.ENGLISH, null, null);
         functionAssertions = new FunctionAssertions(session);
     }
 
@@ -561,6 +559,7 @@ public class TestUnixTimeFunctions
         assertFunction("date_format(" + dateTimeLiteral + ", 'foo')", "foo");
         assertFunction("date_format(" + dateTimeLiteral + ", '%g')", "g");
         assertFunction("date_format(" + dateTimeLiteral + ", '%4')", "4");
+        assertFunction("date_format(" + dateTimeLiteral + ", '%x %v')", "2001 02");
 
         String wierdDateTimeLiteral = "TIMESTAMP '2001-01-09 13:04:05.321 +07:09'";
 
@@ -593,6 +592,7 @@ public class TestUnixTimeFunctions
         assertFunction("date_format(" + wierdDateTimeLiteral + ", 'foo')", "foo");
         assertFunction("date_format(" + wierdDateTimeLiteral + ", '%g')", "g");
         assertFunction("date_format(" + wierdDateTimeLiteral + ", '%4')", "4");
+        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%x %v')", "2001 02");
     }
 
     @Test
@@ -610,13 +610,15 @@ public class TestUnixTimeFunctions
         assertFunction("date_parse('abc 2013-05-17 fff 23:35:10 xyz', 'abc %Y-%m-%d fff %H:%i:%s xyz')", toTimestamp(new DateTime(2013, 5, 17, 23, 35, 10, 0, DATE_TIME_ZONE)));
 
         assertFunction("date_parse('2013 14', '%Y %y')", toTimestamp(new DateTime(2014, 1, 1, 0, 0, 0, 0, DATE_TIME_ZONE)));
+
+        assertFunction("date_parse('1998 53', '%x %v')", toTimestamp(new DateTime(1998, 12, 28, 0, 0, 0, 0, DATE_TIME_ZONE)));
     }
 
     @Test
     public void testLocale()
     {
         Locale locale = Locale.JAPANESE;
-        session = new Session("user", "test", DEFAULT_CATALOG, DEFAULT_SCHEMA, TIME_ZONE_KEY, locale, null, null);
+        session = new ConnectorSession("user", "test", "catalog", "schema", TIME_ZONE_KEY, locale, null, null);
 
         functionAssertions = new FunctionAssertions(session);
 

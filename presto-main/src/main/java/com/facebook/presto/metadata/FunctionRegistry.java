@@ -32,8 +32,8 @@ import com.facebook.presto.operator.window.PercentRankFunction;
 import com.facebook.presto.operator.window.RankFunction;
 import com.facebook.presto.operator.window.RowNumberFunction;
 import com.facebook.presto.operator.window.WindowFunction;
+import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.Session;
 import com.facebook.presto.spi.StandardErrorCode;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
@@ -59,6 +59,7 @@ import com.google.common.base.Optional;
 import com.google.common.base.Predicate;
 import com.google.common.base.Supplier;
 import com.google.common.base.Throwables;
+import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableMap;
@@ -81,12 +82,14 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 import static com.facebook.presto.metadata.FunctionInfo.isAggregationPredicate;
+import static com.facebook.presto.metadata.FunctionInfo.isHiddenPredicate;
 import static com.facebook.presto.operator.aggregation.ApproximateAverageAggregations.DOUBLE_APPROXIMATE_AVERAGE_AGGREGATION;
 import static com.facebook.presto.operator.aggregation.ApproximateAverageAggregations.LONG_APPROXIMATE_AVERAGE_AGGREGATION;
 import static com.facebook.presto.operator.aggregation.ApproximateCountAggregation.APPROXIMATE_COUNT_AGGREGATION;
@@ -148,6 +151,7 @@ import static com.google.common.base.CaseFormat.LOWER_UNDERSCORE;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.base.Predicates.not;
 import static java.lang.String.format;
 import static java.lang.invoke.MethodHandles.lookup;
 
@@ -261,7 +265,9 @@ public class FunctionRegistry
 
     public List<FunctionInfo> list()
     {
-        return functions.list();
+        return FluentIterable.from(functions.list())
+                .filter(not(isHiddenPredicate()))
+                .toList();
     }
 
     public boolean isAggregationFunction(QualifiedName name)
@@ -325,6 +331,7 @@ public class FunctionRegistry
             return new FunctionInfo(
                     new Signature(MAGIC_LITERAL_FUNCTION_PREFIX, type, ImmutableList.copyOf(parameterTypes), false),
                     null,
+                    true,
                     identity,
                     true,
                     new DefaultFunctionBinder(identity, false));
@@ -458,7 +465,7 @@ public class FunctionRegistry
         for (int i = 0; i < method.getParameterTypes().length; i++) {
             Class<?> clazz = method.getParameterTypes()[i];
             // skip session parameters
-            if (clazz == Session.class) {
+            if (clazz == ConnectorSession.class) {
                 continue;
             }
 
@@ -470,7 +477,8 @@ public class FunctionRegistry
                     break;
                 }
             }
-            types.add(type(explicitType, clazz));
+            checkArgument(explicitType != null, "Method %s argument %s does not have a @SqlType annotation", method, i);
+            types.add(type(explicitType));
         }
         return types.build();
     }
@@ -478,17 +486,14 @@ public class FunctionRegistry
     private static List<Class<?>> getParameterTypes(Class<?>... types)
     {
         ImmutableList<Class<?>> parameterTypes = ImmutableList.copyOf(types);
-        if (!parameterTypes.isEmpty() && parameterTypes.get(0) == Session.class) {
+        if (!parameterTypes.isEmpty() && parameterTypes.get(0) == ConnectorSession.class) {
             parameterTypes = parameterTypes.subList(1, parameterTypes.size());
         }
         return parameterTypes;
     }
 
-    private static Type type(SqlType explicitType, Class<?> clazz)
+    private static Type type(SqlType explicitType)
     {
-        if (explicitType == null) {
-            return type(clazz);
-        }
         try {
             return (Type) explicitType.value().getMethod("getInstance").invoke(null);
         }
@@ -557,9 +562,9 @@ public class FunctionRegistry
             return this;
         }
 
-        public FunctionListBuilder scalar(Signature signature, MethodHandle function, boolean deterministic, FunctionBinder functionBinder, String description)
+        public FunctionListBuilder scalar(Signature signature, MethodHandle function, boolean deterministic, FunctionBinder functionBinder, String description, boolean hidden)
         {
-            functions.add(new FunctionInfo(signature, description, function, deterministic, functionBinder));
+            functions.add(new FunctionInfo(signature, description, hidden, function, deterministic, functionBinder));
             return this;
         }
 
@@ -598,14 +603,18 @@ public class FunctionRegistry
             if (name.isEmpty()) {
                 name = camelToSnake(method.getName());
             }
-            Type returnType = type(method.getAnnotation(SqlType.class), method.getReturnType());
+            SqlType returnTypeAnnotation = method.getAnnotation(SqlType.class);
+            checkArgument(returnTypeAnnotation != null, "Method %s return type does not have a @SqlType annotation", method);
+            Type returnType = type(returnTypeAnnotation);
             Signature signature = new Signature(name.toLowerCase(), returnType, parameterTypes(method), false);
+
+            verifyMethodSignature(method, signature.getReturnType(), signature.getArgumentTypes());
 
             FunctionBinder functionBinder = createFunctionBinder(method, scalarFunction.functionBinder());
 
-            scalar(signature, methodHandle, scalarFunction.deterministic(), functionBinder, getDescription(method));
+            scalar(signature, methodHandle, scalarFunction.deterministic(), functionBinder, getDescription(method), scalarFunction.hidden());
             for (String alias : scalarFunction.alias()) {
-                scalar(signature.withAlias(alias.toLowerCase()), methodHandle, scalarFunction.deterministic(), functionBinder, getDescription(method));
+                scalar(signature.withAlias(alias.toLowerCase()), methodHandle, scalarFunction.deterministic(), functionBinder, getDescription(method), scalarFunction.hidden());
             }
             return true;
         }
@@ -620,18 +629,25 @@ public class FunctionRegistry
             checkValidMethod(method);
             MethodHandle methodHandle = lookup().unreflect(method);
             OperatorType operatorType = scalarOperator.value();
+
+            List<Type> parameterTypes = parameterTypes(method);
+
             Type returnType;
             if (operatorType == OperatorType.HASH_CODE) {
                 // todo hack for hashCode... should be int
                 returnType = BIGINT;
             }
             else {
-                returnType = type(method.getAnnotation(SqlType.class), method.getReturnType());
+                SqlType explicitType = method.getAnnotation(SqlType.class);
+                checkArgument(explicitType != null, "Method %s return type does not have a @SqlType annotation", method);
+                returnType = type(explicitType);
+
+                verifyMethodSignature(method, returnType, parameterTypes);
             }
 
             FunctionBinder functionBinder = createFunctionBinder(method, scalarOperator.functionBinder());
 
-            operator(operatorType, returnType, parameterTypes(method), methodHandle, functionBinder);
+            operator(operatorType, returnType, parameterTypes, methodHandle, functionBinder);
             return true;
         }
 
@@ -696,6 +712,32 @@ public class FunctionRegistry
         public List<OperatorInfo> getOperators()
         {
             return ImmutableList.copyOf(operators);
+        }
+    }
+
+    private static void verifyMethodSignature(Method method, Type returnType, List<Type> argumentTypes)
+    {
+        checkArgument(Primitives.unwrap(method.getReturnType()) == returnType.getJavaType(),
+                "Expected method %s return type to be %s (%s)",
+                method,
+                returnType.getJavaType().getName(),
+                returnType);
+
+        // skip Session argument
+        Class<?>[] parameterTypes = method.getParameterTypes();
+        if (parameterTypes.length > 0 && parameterTypes[0] == ConnectorSession.class) {
+            parameterTypes = Arrays.copyOfRange(parameterTypes, 1, parameterTypes.length);
+        }
+
+        for (int i = 0; i < parameterTypes.length; i++) {
+            Class<?> actualType = parameterTypes[i];
+            Type expectedType = argumentTypes.get(i);
+            checkArgument(Primitives.unwrap(actualType) == expectedType.getJavaType(),
+                    "Expected method %s parameter %s type to be %s (%s)",
+                    method,
+                    i,
+                    expectedType.getJavaType().getName(),
+                    expectedType);
         }
     }
 

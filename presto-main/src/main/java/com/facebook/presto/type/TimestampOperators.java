@@ -14,12 +14,14 @@
 package com.facebook.presto.type;
 
 import com.facebook.presto.operator.scalar.ScalarOperator;
-import com.facebook.presto.spi.Session;
+import com.facebook.presto.spi.ConnectorSession;
+import com.facebook.presto.spi.type.BooleanType;
 import com.facebook.presto.spi.type.DateType;
 import com.facebook.presto.spi.type.TimeType;
 import com.facebook.presto.spi.type.TimeWithTimeZoneType;
 import com.facebook.presto.spi.type.TimestampType;
 import com.facebook.presto.spi.type.TimestampWithTimeZoneType;
+import com.facebook.presto.spi.type.VarcharType;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import org.joda.time.chrono.ISOChronology;
@@ -47,42 +49,49 @@ public final class TimestampOperators
     }
 
     @ScalarOperator(EQUAL)
+    @SqlType(BooleanType.class)
     public static boolean equal(@SqlType(TimestampType.class) long left, @SqlType(TimestampType.class) long right)
     {
         return left == right;
     }
 
     @ScalarOperator(NOT_EQUAL)
+    @SqlType(BooleanType.class)
     public static boolean notEqual(@SqlType(TimestampType.class) long left, @SqlType(TimestampType.class) long right)
     {
         return left != right;
     }
 
     @ScalarOperator(LESS_THAN)
+    @SqlType(BooleanType.class)
     public static boolean lessThan(@SqlType(TimestampType.class) long left, @SqlType(TimestampType.class) long right)
     {
         return left < right;
     }
 
     @ScalarOperator(LESS_THAN_OR_EQUAL)
+    @SqlType(BooleanType.class)
     public static boolean lessThanOrEqual(@SqlType(TimestampType.class) long left, @SqlType(TimestampType.class) long right)
     {
         return left <= right;
     }
 
     @ScalarOperator(GREATER_THAN)
+    @SqlType(BooleanType.class)
     public static boolean greaterThan(@SqlType(TimestampType.class) long left, @SqlType(TimestampType.class) long right)
     {
         return left > right;
     }
 
     @ScalarOperator(GREATER_THAN_OR_EQUAL)
+    @SqlType(BooleanType.class)
     public static boolean greaterThanOrEqual(@SqlType(TimestampType.class) long left, @SqlType(TimestampType.class) long right)
     {
         return left >= right;
     }
 
     @ScalarOperator(BETWEEN)
+    @SqlType(BooleanType.class)
     public static boolean between(@SqlType(TimestampType.class) long value, @SqlType(TimestampType.class) long min, @SqlType(TimestampType.class) long max)
     {
         return min <= value && value <= max;
@@ -90,7 +99,7 @@ public final class TimestampOperators
 
     @ScalarOperator(CAST)
     @SqlType(DateType.class)
-    public static long castToDate(Session session, @SqlType(TimestampType.class) long value)
+    public static long castToDate(ConnectorSession session, @SqlType(TimestampType.class) long value)
     {
         // round down the current timestamp to days
         ISOChronology chronology = getChronology(session.getTimeZoneKey());
@@ -102,14 +111,14 @@ public final class TimestampOperators
 
     @ScalarOperator(CAST)
     @SqlType(TimeType.class)
-    public static long castToTime(Session session, @SqlType(TimestampType.class) long value)
+    public static long castToTime(ConnectorSession session, @SqlType(TimestampType.class) long value)
     {
         return modulo24Hour(getChronology(session.getTimeZoneKey()), value);
     }
 
     @ScalarOperator(CAST)
     @SqlType(TimeWithTimeZoneType.class)
-    public static long castToTimeWithTimeZone(Session session, @SqlType(TimestampType.class) long value)
+    public static long castToTimeWithTimeZone(ConnectorSession session, @SqlType(TimestampType.class) long value)
     {
         int timeMillis = modulo24Hour(getChronology(session.getTimeZoneKey()), value);
         return packDateTimeWithZone(timeMillis, session.getTimeZoneKey());
@@ -117,20 +126,21 @@ public final class TimestampOperators
 
     @ScalarOperator(CAST)
     @SqlType(TimestampWithTimeZoneType.class)
-    public static long castToTimestampWithTimeZone(Session session, @SqlType(TimestampType.class) long value)
+    public static long castToTimestampWithTimeZone(ConnectorSession session, @SqlType(TimestampType.class) long value)
     {
         return packDateTimeWithZone(value, session.getTimeZoneKey());
     }
 
     @ScalarOperator(CAST)
-    public static Slice castToSlice(Session session, @SqlType(TimestampType.class) long value)
+    @SqlType(VarcharType.class)
+    public static Slice castToSlice(ConnectorSession session, @SqlType(TimestampType.class) long value)
     {
         return Slices.copiedBuffer(printTimestampWithoutTimeZone(session.getTimeZoneKey(), value), UTF_8);
     }
 
     @ScalarOperator(CAST)
     @SqlType(TimestampType.class)
-    public static long castFromSlice(Session session, Slice value)
+    public static long castFromSlice(ConnectorSession session, @SqlType(VarcharType.class) Slice value)
     {
         return parseTimestampWithoutTimeZone(session.getTimeZoneKey(), value.toStringUtf8());
     }

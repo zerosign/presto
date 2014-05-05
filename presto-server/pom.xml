@@ -5,7 +5,7 @@
     <parent>
         <groupId>com.facebook.presto</groupId>
         <artifactId>presto-root</artifactId>
-        <version>0.66-SNAPSHOT</version>
+        <version>0.66</version>
     </parent>
 
     <artifactId>presto-server</artifactId>
@@ -307,6 +307,14 @@
                                     <type>zip</type>
                                     <overWrite>false</overWrite>
                                     <outputDirectory>${project.build.directory}/plugin/hive-cdh4</outputDirectory>
+                                </artifactItem>
+                                <artifactItem>
+                                    <groupId>com.facebook.presto</groupId>
+                                    <artifactId>presto-hive-cdh5</artifactId>
+                                    <version>${project.version}</version>
+                                    <type>zip</type>
+                                    <overWrite>false</overWrite>
+                                    <outputDirectory>${project.build.directory}/plugin/hive-cdh5</outputDirectory>
                                 </artifactItem>
                                 <artifactItem>
                                     <groupId>com.facebook.presto</groupId>

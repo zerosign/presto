@@ -18,6 +18,7 @@ import com.facebook.presto.connector.ConnectorManager;
 import com.facebook.presto.connector.system.SystemTablesManager;
 import com.facebook.presto.metadata.FunctionFactory;
 import com.facebook.presto.metadata.MetadataManager;
+import com.facebook.presto.metadata.OperatorFactory;
 import com.facebook.presto.spi.ConnectorFactory;
 import com.facebook.presto.spi.Plugin;
 import com.facebook.presto.spi.SystemTable;
@@ -59,6 +60,16 @@ import static com.google.common.base.Preconditions.checkNotNull;
 @ThreadSafe
 public class PluginManager
 {
+    private static final List<String> HIDDEN_CLASSES = ImmutableList.<String>builder()
+            .add("org.slf4j")
+            .build();
+
+    private static final ImmutableList<String> PARENT_FIRST_CLASSES = ImmutableList.<String>builder()
+            .add("com.facebook.presto")
+            .add("com.fasterxml.jackson")
+            .add("io.airlift.slice")
+            .build();
+
     private static final Logger log = Logger.get(PluginManager.class);
 
     private final Injector injector;
@@ -185,6 +196,10 @@ public class PluginManager
         for (FunctionFactory functionFactory : plugin.getServices(FunctionFactory.class)) {
             metadataManager.addFunctions(functionFactory.listFunctions());
         }
+
+        for (OperatorFactory operatorFactory : plugin.getServices(OperatorFactory.class)) {
+            metadataManager.addOperators(operatorFactory.listOperators());
+        }
     }
 
     private URLClassLoader buildClassLoader(String plugin)
@@ -194,12 +209,10 @@ public class PluginManager
         if (file.isFile() && (file.getName().equals("pom.xml") || file.getName().endsWith(".pom"))) {
             return buildClassLoaderFromPom(file);
         }
-        else if (file.isDirectory()) {
+        if (file.isDirectory()) {
             return buildClassLoaderFromDirectory(file);
         }
-        else {
-            return buildClassLoaderFromCoordinates(plugin);
-        }
+        return buildClassLoaderFromCoordinates(plugin);
     }
 
     private URLClassLoader buildClassLoaderFromPom(File pomFile)
@@ -257,13 +270,11 @@ public class PluginManager
 
     private URLClassLoader createClassLoader(List<URL> urls)
     {
-        return new SimpleChildFirstClassLoader(urls,
-                getClass().getClassLoader(),
-                ImmutableList.of("org.slf4j"),
-                ImmutableList.of("com.facebook.presto", "com.fasterxml.jackson"));
+        ClassLoader parent = getClass().getClassLoader();
+        return new SimpleChildFirstClassLoader(urls, parent, HIDDEN_CLASSES, PARENT_FIRST_CLASSES);
     }
 
-    private List<File> listFiles(File installedPluginsDir)
+    private static List<File> listFiles(File installedPluginsDir)
     {
         if (installedPluginsDir != null && installedPluginsDir.isDirectory()) {
             File[] files = installedPluginsDir.listFiles();

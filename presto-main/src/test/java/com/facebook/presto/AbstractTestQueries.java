@@ -53,6 +53,7 @@ import static io.airlift.tpch.TpchTable.ORDERS;
 import static io.airlift.tpch.TpchTable.tableNameGetter;
 import static java.lang.String.format;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
 
 public abstract class AbstractTestQueries
@@ -2315,6 +2316,8 @@ public abstract class AbstractTestQueries
         assertEquals(functions.get("split_part").asList().get(0).getField(1), "varchar");
         assertEquals(functions.get("split_part").asList().get(0).getField(2), "varchar, varchar, bigint");
         assertEquals(functions.get("split_part").asList().get(0).getField(3), "scalar");
+
+        assertFalse(functions.containsKey("at_time_zone"), "Expected function names " + functions + " not to contain 'at_time_zone'");
     }
 
     @Test
@@ -3253,5 +3256,33 @@ public abstract class AbstractTestQueries
                 .build();
 
         assertEquals(actual.getMaterializedRows(), expected.getMaterializedRows());
+    }
+
+    @Test
+    public void testValuesWithNonTrivialType()
+            throws Exception
+    {
+        MaterializedResult actual = computeActual("VALUES (0.0/0.0, 1.0/0.0, -1.0/0.0)");
+
+        List<MaterializedRow> rows = actual.getMaterializedRows();
+        assertEquals(rows.size(), 1);
+
+        MaterializedRow row = rows.get(0);
+        assertTrue(((Double) row.getField(0)).isNaN());
+        assertEquals(row.getField(1), Double.POSITIVE_INFINITY);
+        assertEquals(row.getField(2), Double.NEGATIVE_INFINITY);
+    }
+
+    @Test
+    public void testValuesWithTimestamp()
+            throws Exception
+    {
+        MaterializedResult actual = computeActual("VALUES (current_timestamp, now())");
+
+        List<MaterializedRow> rows = actual.getMaterializedRows();
+        assertEquals(rows.size(), 1);
+
+        MaterializedRow row = rows.get(0);
+        assertEquals(row.getField(0), row.getField(1));
     }
 }

@@ -16,18 +16,25 @@ package com.facebook.presto.metadata;
 import com.facebook.presto.metadata.OperatorInfo.OperatorType;
 import com.facebook.presto.operator.scalar.CustomAdd;
 import com.facebook.presto.operator.scalar.ScalarFunction;
+import com.facebook.presto.spi.type.BigintType;
 import com.facebook.presto.sql.tree.QualifiedName;
+import com.facebook.presto.type.SqlType;
 import com.facebook.presto.type.TypeRegistry;
 import com.google.common.collect.ImmutableList;
 import org.testng.annotations.Test;
 
 import java.util.List;
 
+import static com.facebook.presto.metadata.FunctionInfo.nameGetter;
 import static com.facebook.presto.metadata.FunctionRegistry.getMagicLiteralFunctionSignature;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.HyperLogLogType.HYPER_LOG_LOG;
 import static com.facebook.presto.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
+import static com.google.common.base.Functions.toStringFunction;
+import static com.google.common.collect.Lists.transform;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertTrue;
 
 public class TestFunctionRegistry
 {
@@ -80,12 +87,27 @@ public class TestFunctionRegistry
         registry.addFunctions(functions, ImmutableList.<OperatorInfo>of());
     }
 
+    @Test
+    public void testListingHiddenFunctions()
+            throws Exception
+    {
+        FunctionRegistry registry = new FunctionRegistry(new TypeRegistry(), true);
+        List<FunctionInfo> functions = registry.list();
+        List<String> names = transform(transform(functions, nameGetter()), toStringFunction());
+
+        assertTrue(names.contains("length"), "Expected function names " + names + " to contain 'length'");
+        assertTrue(names.contains("stddev"), "Expected function names " + names + " to contain 'stddev'");
+        assertTrue(names.contains("rank"), "Expected function names " + names + " to contain 'rank'");
+        assertFalse(names.contains("at_time_zone"), "Expected function names " + names + " not to contain 'at_time_zone'");
+    }
+
     public static final class ScalarSum
     {
         private ScalarSum() {}
 
         @ScalarFunction
-        public static long sum(long a, long b)
+        @SqlType(BigintType.class)
+        public static long sum(@SqlType(BigintType.class) long a, @SqlType(BigintType.class) long b)
         {
             return a + b;
         }
