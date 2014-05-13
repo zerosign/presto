@@ -501,6 +501,7 @@ specialFunction
 type
     : VARCHAR                    -> IDENT["VARCHAR"]
     | BIGINT                     -> IDENT["BIGINT"]
+    | INTEGER                    -> IDENT["BIGINT"]
     | DOUBLE                     -> IDENT["DOUBLE"]
     | BOOLEAN                    -> IDENT["BOOLEAN"]
     | TIME WITH TIME ZONE        -> IDENT["TIME WITH TIME ZONE"]
