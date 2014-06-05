@@ -14,9 +14,11 @@
 package com.facebook.presto.type;
 
 import com.facebook.presto.operator.scalar.ScalarOperator;
+import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.type.BigintType;
 import com.facebook.presto.spi.type.BooleanType;
 import com.facebook.presto.spi.type.DoubleType;
+import com.facebook.presto.spi.type.VarbinaryType;
 import com.facebook.presto.spi.type.VarcharType;
 import io.airlift.slice.Slice;
 
@@ -29,6 +31,8 @@ import static com.facebook.presto.metadata.OperatorInfo.OperatorType.HASH_CODE;
 import static com.facebook.presto.metadata.OperatorInfo.OperatorType.LESS_THAN;
 import static com.facebook.presto.metadata.OperatorInfo.OperatorType.LESS_THAN_OR_EQUAL;
 import static com.facebook.presto.metadata.OperatorInfo.OperatorType.NOT_EQUAL;
+import static com.facebook.presto.spi.StandardErrorCode.INVALID_CAST_ARGUMENT;
+import static java.lang.String.format;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 public final class VarcharOperators
@@ -114,7 +118,7 @@ public final class VarcharOperators
                 (toUpperCase(value.getByte(4)) == 'E')) {
             return false;
         }
-        throw new IllegalArgumentException(String.format("Cannot cast '%s' to BOOLEAN", value.toString(UTF_8)));
+        throw new PrestoException(INVALID_CAST_ARGUMENT.toErrorCode(), format("Cannot cast '%s' to BOOLEAN", value.toString(UTF_8)));
     }
 
     private static byte toUpperCase(byte b)
@@ -135,7 +139,7 @@ public final class VarcharOperators
             return Double.parseDouble(slice.toString(UTF_8));
         }
         catch (Exception e) {
-            throw new IllegalArgumentException(String.format("Can not cast '%s' to DOUBLE", slice.toString(UTF_8)));
+            throw new PrestoException(INVALID_CAST_ARGUMENT.toErrorCode(), format("Can not cast '%s' to DOUBLE", slice.toString(UTF_8)));
         }
     }
 
@@ -147,8 +151,15 @@ public final class VarcharOperators
             return Long.parseLong(slice.toString(UTF_8));
         }
         catch (Exception e) {
-            throw new IllegalArgumentException(String.format("Can not cast '%s' to BIGINT", slice.toString(UTF_8)));
+            throw new PrestoException(INVALID_CAST_ARGUMENT.toErrorCode(), format("Can not cast '%s' to BIGINT", slice.toString(UTF_8)));
         }
+    }
+
+    @ScalarOperator(CAST)
+    @SqlType(VarbinaryType.class)
+    public static Slice castToBinary(@SqlType(VarcharType.class) Slice slice)
+    {
+        return slice;
     }
 
     @ScalarOperator(HASH_CODE)

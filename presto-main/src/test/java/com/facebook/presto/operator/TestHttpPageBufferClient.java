@@ -47,9 +47,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static com.facebook.presto.PrestoMediaTypes.PRESTO_PAGES;
-import static com.facebook.presto.serde.TestingBlockEncodingManager.createTestingBlockEncodingManager;
-import static com.facebook.presto.util.Threads.daemonThreadsNamed;
+import static com.facebook.presto.testing.TestingBlockEncodingManager.createTestingBlockEncodingManager;
 import static com.google.common.net.HttpHeaders.CONTENT_TYPE;
+import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.testing.Assertions.assertContains;
 import static io.airlift.testing.Assertions.assertInstanceOf;
 import static java.util.concurrent.Executors.newScheduledThreadPool;

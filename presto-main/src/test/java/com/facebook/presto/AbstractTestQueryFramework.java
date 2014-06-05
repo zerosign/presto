@@ -35,8 +35,8 @@ import com.facebook.presto.sql.tree.ExplainType;
 import com.facebook.presto.tpch.TpchMetadata;
 import com.facebook.presto.tpch.TpchTableHandle;
 import com.facebook.presto.type.TypeRegistry;
-import com.facebook.presto.util.MaterializedResult;
-import com.facebook.presto.util.MaterializedRow;
+import com.facebook.presto.testing.MaterializedResult;
+import com.facebook.presto.testing.MaterializedRow;
 import com.google.common.base.Function;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableMultiset;
@@ -187,6 +187,12 @@ public abstract class AbstractTestQueryFramework
             throws Exception
     {
         assertQuery(actual, expected, true);
+    }
+
+    protected void assertQueryTrue(@Language("SQL") String sql)
+            throws Exception
+    {
+        assertQuery(sql, "SELECT true");
     }
 
     private static final Logger log = Logger.get(AbstractTestQueries.class);

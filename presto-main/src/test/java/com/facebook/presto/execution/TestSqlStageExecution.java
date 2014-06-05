@@ -49,7 +49,6 @@ import com.facebook.presto.sql.planner.plan.PlanFragmentId;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.type.TypeRegistry;
-import com.facebook.presto.util.Threads;
 import com.google.common.base.Optional;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
@@ -71,6 +70,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -85,6 +85,7 @@ import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.planner.plan.TableScanNode.GeneratedPartitions;
 import static com.facebook.presto.util.Failures.toFailures;
 import static com.google.common.base.Preconditions.checkNotNull;
+import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
@@ -104,6 +105,19 @@ public class TestSqlStageExecution
     {
         metadata = new MetadataManager(new FeaturesConfig(), new TypeRegistry());
         metadata.addGlobalSchemaMetadata(DualConnector.CONNECTOR_ID, new DualMetadata());
+    }
+
+    @Test(expectedExceptions = ExecutionException.class, expectedExceptionsMessageRegExp = ".*No nodes available to run query")
+    public void testExcludeCoordinator()
+            throws Exception
+    {
+        InMemoryNodeManager nodeManager = new InMemoryNodeManager();
+        NodeScheduler nodeScheduler = new NodeScheduler(nodeManager, new NodeSchedulerConfig().setIncludeCoordinator(false));
+
+        // Start sql stage execution
+        SqlStageExecution sqlStageExecution = createSqlStageExecution(nodeScheduler, 2, 20);
+        Future future = sqlStageExecution.start();
+        future.get(1, TimeUnit.SECONDS);
     }
 
     @Test
@@ -179,9 +193,9 @@ public class TestSqlStageExecution
     private SqlStageExecution createSqlStageExecution(NodeScheduler nodeScheduler, int splitBatchSize, int maxPendingSplitsPerNode)
     {
         int splitCount = 20;
-        ExecutorService remoteTaskExecutor = Executors.newCachedThreadPool(Threads.daemonThreadsNamed("remoteTaskExecutor"));
+        ExecutorService remoteTaskExecutor = Executors.newCachedThreadPool(daemonThreadsNamed("remoteTaskExecutor"));
         MockRemoteTaskFactory remoteTaskFactory = new MockRemoteTaskFactory(remoteTaskExecutor);
-        ExecutorService executor = Executors.newCachedThreadPool(Threads.daemonThreadsNamed("stageExecutor"));
+        ExecutorService executor = Executors.newCachedThreadPool(daemonThreadsNamed("stageExecutor"));
 
         OutputBuffers outputBuffers = INITIAL_EMPTY_OUTPUT_BUFFERS
                 .withBuffer("out", new UnpartitionedPagePartitionFunction())
@@ -205,7 +219,7 @@ public class TestSqlStageExecution
     public void testYieldCausesFullSchedule()
             throws Exception
     {
-        ExecutorService executor = Executors.newCachedThreadPool(Threads.daemonThreadsNamed("test"));
+        ExecutorService executor = Executors.newCachedThreadPool(daemonThreadsNamed("test"));
         SqlStageExecution stageExecution = null;
         try {
             MetadataManager metadata = new MetadataManager(new FeaturesConfig(), new TypeRegistry());

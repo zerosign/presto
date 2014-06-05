@@ -27,7 +27,6 @@ import com.facebook.presto.index.IndexManager;
 import com.facebook.presto.metadata.ColumnHandle;
 import com.facebook.presto.metadata.InMemoryNodeManager;
 import com.facebook.presto.metadata.MetadataManager;
-import com.facebook.presto.metadata.MockLocalStorageManager;
 import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.operator.RecordSinkManager;
 import com.facebook.presto.spi.ConnectorColumnHandle;
@@ -66,7 +65,6 @@ import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
-import java.io.File;
 import java.net.URI;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
@@ -75,7 +73,7 @@ import java.util.concurrent.TimeUnit;
 
 import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
-import static com.facebook.presto.util.Threads.threadsNamed;
+import static io.airlift.concurrent.Threads.threadsNamed;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
@@ -122,7 +120,6 @@ public class TestSqlTaskExecution
                 metadata,
                 dataStreamProvider,
                 new IndexManager(),
-                new MockLocalStorageManager(new File("target/temp")),
                 new RecordSinkManager(),
                 new MockExchangeClientSupplier(),
                 new ExpressionCompiler(metadata));

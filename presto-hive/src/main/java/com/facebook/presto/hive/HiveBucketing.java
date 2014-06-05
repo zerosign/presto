@@ -14,9 +14,11 @@
 package com.facebook.presto.hive;
 
 import com.facebook.presto.spi.ConnectorColumnHandle;
+import com.google.common.base.Objects;
 import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import io.airlift.log.Logger;
+import io.airlift.slice.Slice;
 import org.apache.hadoop.hive.metastore.api.Table;
 import org.apache.hadoop.hive.ql.io.DefaultHivePartitioner;
 import org.apache.hadoop.hive.ql.io.HiveKey;
@@ -26,6 +28,7 @@ import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector;
 import org.apache.hadoop.hive.serde2.objectinspector.PrimitiveObjectInspector;
 import org.apache.hadoop.hive.serde2.objectinspector.StructField;
 import org.apache.hadoop.hive.serde2.objectinspector.primitive.IntObjectInspector;
+import org.apache.hadoop.hive.serde2.typeinfo.PrimitiveTypeSpec;
 
 import java.util.HashMap;
 import java.util.List;
@@ -33,6 +36,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static com.facebook.presto.hive.HiveUtil.getTableStructFields;
+import static com.facebook.presto.hive.util.Types.checkType;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.Maps.immutableEntry;
 import static com.google.common.collect.Sets.immutableEnumSet;
@@ -84,7 +88,7 @@ final class HiveBucketing
             if ((inspector == null) || (inspector.getCategory() != Category.PRIMITIVE)) {
                 return Optional.absent();
             }
-            if (!SUPPORTED_TYPES.contains(((PrimitiveObjectInspector) inspector).getPrimitiveCategory())) {
+            if (!SUPPORTED_TYPES.contains(((PrimitiveTypeSpec) inspector).getPrimitiveCategory())) {
                 return Optional.absent();
             }
         }
@@ -115,6 +119,7 @@ final class HiveBucketing
     public static Optional<HiveBucket> getHiveBucket(List<Entry<ObjectInspector, Object>> columnBindings, int bucketCount)
     {
         try {
+            @SuppressWarnings("resource")
             GenericUDFHash udf = new GenericUDFHash();
             ObjectInspector[] objectInspectors = new ObjectInspector[columnBindings.size()];
             DeferredObject[] deferredObjects = new DeferredObject[columnBindings.size()];
@@ -127,8 +132,7 @@ final class HiveBucketing
             }
 
             ObjectInspector udfInspector = udf.initialize(objectInspectors);
-            checkArgument(udfInspector instanceof IntObjectInspector, "expected IntObjectInspector: %s", udfInspector);
-            IntObjectInspector inspector = (IntObjectInspector) udfInspector;
+            IntObjectInspector inspector = checkType(udfInspector, IntObjectInspector.class, "udfInspector");
 
             Object result = udf.evaluate(deferredObjects);
             HiveKey hiveKey = new HiveKey();
@@ -181,7 +185,7 @@ final class HiveBucketing
             case LONG:
                 return new DeferredJavaObject(object);
             case STRING:
-                return new DeferredJavaObject(object);
+                return new DeferredJavaObject(((Slice) object).toStringUtf8());
         }
         throw new RuntimeException("Unsupported type: " + poi.getPrimitiveCategory());
     }
@@ -209,6 +213,15 @@ final class HiveBucketing
         public int getBucketCount()
         {
             return bucketCount;
+        }
+
+        @Override
+        public String toString()
+        {
+            return Objects.toStringHelper(this)
+                    .add("bucketNumber", bucketNumber)
+                    .add("bucketCount", bucketCount)
+                    .toString();
         }
     }
 }

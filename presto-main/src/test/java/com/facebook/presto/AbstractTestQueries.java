@@ -20,8 +20,8 @@ import com.facebook.presto.operator.scalar.CreateHll;
 import com.facebook.presto.operator.scalar.CustomAdd;
 import com.facebook.presto.operator.window.CustomRank;
 import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.util.MaterializedResult;
-import com.facebook.presto.util.MaterializedRow;
+import com.facebook.presto.testing.MaterializedResult;
+import com.facebook.presto.testing.MaterializedRow;
 import com.google.common.base.Function;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableList;
@@ -47,7 +47,7 @@ import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.tree.ExplainType.Type.DISTRIBUTED;
 import static com.facebook.presto.sql.tree.ExplainType.Type.LOGICAL;
-import static com.facebook.presto.util.MaterializedResult.resultBuilder;
+import static com.facebook.presto.testing.MaterializedResult.resultBuilder;
 import static com.google.common.collect.Iterables.transform;
 import static io.airlift.tpch.TpchTable.ORDERS;
 import static io.airlift.tpch.TpchTable.tableNameGetter;
@@ -1736,6 +1736,22 @@ public abstract class AbstractTestQueries
     }
 
     @Test
+    public void testWindowFunctionWithGroupBy()
+            throws Exception
+    {
+        MaterializedResult actual = computeActual("" +
+                "SELECT *, rank() OVER (PARTITION BY x)\n" +
+                "FROM (SELECT 'foo' x)\n" +
+                "GROUP BY 1");
+
+        MaterializedResult expected = resultBuilder(getSession(), VARCHAR, BIGINT)
+                .row("foo", 1)
+                .build();
+
+        assertEquals(actual, expected);
+    }
+
+    @Test
     public void testOrderByWindowFunctionWithNulls()
             throws Exception
     {
@@ -2964,7 +2980,7 @@ public abstract class AbstractTestQueries
         assertTrue(stats.getVariance() > 0, "Samples all had the exact same size");
     }
 
-    @Test(expectedExceptions = RuntimeException.class, expectedExceptionsMessageRegExp = "\\QUnexpected parameters (bigint) for function length. Expected: length(varchar)\\E")
+    @Test(expectedExceptions = RuntimeException.class, expectedExceptionsMessageRegExp = "\\QUnexpected parameters (bigint) for function length. Expected:\\E.*")
     public void testFunctionNotRegistered()
     {
         computeActual("SELECT length(1)");

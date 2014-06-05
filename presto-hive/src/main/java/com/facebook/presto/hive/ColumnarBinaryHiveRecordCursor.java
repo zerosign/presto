@@ -14,6 +14,7 @@
 package com.facebook.presto.hive;
 
 import com.facebook.presto.hive.util.SerDeUtils;
+import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.base.Charsets;
 import com.google.common.base.Throwables;
@@ -42,6 +43,7 @@ import java.util.Set;
 
 import static com.facebook.presto.hive.HiveBooleanParser.isFalse;
 import static com.facebook.presto.hive.HiveBooleanParser.isTrue;
+import static com.facebook.presto.hive.HiveErrorCode.HIVE_CURSOR_ERROR;
 import static com.facebook.presto.hive.HiveUtil.getTableObjectInspector;
 import static com.facebook.presto.hive.NumberParser.parseDouble;
 import static com.facebook.presto.hive.NumberParser.parseLong;
@@ -49,6 +51,7 @@ import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
+import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -272,8 +275,8 @@ class ColumnarBinaryHiveRecordCursor<K>
             return true;
         }
         catch (IOException | RuntimeException e) {
-            close();
-            throw Throwables.propagate(e);
+            closeWithSuppression(e);
+            throw new PrestoException(HIVE_CURSOR_ERROR.toErrorCode(), e);
         }
     }
 
@@ -502,7 +505,11 @@ class ColumnarBinaryHiveRecordCursor<K>
     {
         checkState(!closed, "Cursor is closed");
 
-        validateType(fieldId, VARCHAR);
+        if (!types[fieldId].equals(VARCHAR) && !types[fieldId].equals(VARBINARY)) {
+            // we don't use Preconditions.checkArgument because it requires boxing fieldId, which affects inner loop performance
+            throw new IllegalArgumentException(String.format("Expected field to be VARCHAR or VARBINARY, actual %s (field %s)", types[fieldId], fieldId));
+        }
+
         if (!loaded[fieldId]) {
             parseStringColumn(fieldId);
         }
