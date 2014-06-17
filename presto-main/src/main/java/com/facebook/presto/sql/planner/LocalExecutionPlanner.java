@@ -51,10 +51,10 @@ import com.facebook.presto.operator.SourceOperatorFactory;
 import com.facebook.presto.operator.TableScanOperator.TableScanOperatorFactory;
 import com.facebook.presto.operator.TopNOperator.TopNOperatorFactory;
 import com.facebook.presto.operator.ValuesOperator.ValuesOperatorFactory;
+import com.facebook.presto.operator.WindowFunctionDefinition;
 import com.facebook.presto.operator.WindowOperator.WindowOperatorFactory;
 import com.facebook.presto.operator.index.IndexLookupSourceSupplier;
 import com.facebook.presto.operator.index.IndexSourceOperator;
-import com.facebook.presto.operator.window.WindowFunction;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.Index;
 import com.facebook.presto.spi.RecordSink;
@@ -160,6 +160,7 @@ public class LocalExecutionPlanner
     private final RecordSinkManager recordSinkManager;
     private final Supplier<ExchangeClient> exchangeClientSupplier;
     private final ExpressionCompiler compiler;
+    private final boolean interpreterEnabled;
 
     @Inject
     public LocalExecutionPlanner(NodeInfo nodeInfo,
@@ -168,8 +169,10 @@ public class LocalExecutionPlanner
             IndexManager indexManager,
             RecordSinkManager recordSinkManager,
             Supplier<ExchangeClient> exchangeClientSupplier,
-            ExpressionCompiler compiler)
+            ExpressionCompiler compiler,
+            CompilerConfig config)
     {
+        checkNotNull(config, "config is null");
         this.nodeInfo = checkNotNull(nodeInfo, "nodeInfo is null");
         this.dataStreamProvider = dataStreamProvider;
         this.indexManager = checkNotNull(indexManager, "indexManager is null");
@@ -177,6 +180,8 @@ public class LocalExecutionPlanner
         this.metadata = checkNotNull(metadata, "metadata is null");
         this.recordSinkManager = checkNotNull(recordSinkManager, "recordSinkManager is null");
         this.compiler = checkNotNull(compiler, "compiler is null");
+
+        interpreterEnabled = config.isInterpreterEnabled();
     }
 
     public LocalExecutionPlan plan(ConnectorSession session,
@@ -385,12 +390,17 @@ public class LocalExecutionPlanner
                 outputChannels.add(i);
             }
 
-            ImmutableList.Builder<WindowFunction> windowFunctions = ImmutableList.builder();
+            ImmutableList.Builder<WindowFunctionDefinition> windowFunctions = ImmutableList.builder();
             List<Symbol> windowFunctionOutputSymbols = new ArrayList<>();
             for (Map.Entry<Symbol, FunctionCall> entry : node.getWindowFunctions().entrySet()) {
+                ImmutableList.Builder<Input> arguments = ImmutableList.builder();
+                for (Expression argument : entry.getValue().getArguments()) {
+                    Symbol argumentSymbol = Symbol.fromQualifiedName(((QualifiedNameReference) argument).getName());
+                    arguments.add(source.getLayout().get(argumentSymbol));
+                }
                 Symbol symbol = entry.getKey();
                 Signature signature = node.getSignatures().get(symbol);
-                windowFunctions.add(metadata.getExactFunction(signature).getWindowFunction().get());
+                windowFunctions.add(metadata.getExactFunction(signature).bindWindowFunction(arguments.build()));
                 windowFunctionOutputSymbols.add(symbol);
             }
 
@@ -705,6 +715,10 @@ public class LocalExecutionPlanner
                 }
             }
             catch (RuntimeException e) {
+                if (!interpreterEnabled) {
+                    throw e;
+                }
+
                 // compilation failed, use interpreter
                 log.error(e, "Compile failed for filter=%s projections=%s sourceTypes=%s error=%s", filterExpression, projectionExpressions, sourceTypes, e);
             }

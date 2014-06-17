@@ -230,9 +230,9 @@ public class TestDateTimeOperators
     @Test
     public void testDateToTimestampWithZoneCoercing()
     {
-        assertFunction("DATE '2013-10-27' = TIMESTAMP '2013-10-27 03:09:00 +05:09'", true);
-        assertFunction("DATE '2013-10-27' < TIMESTAMP '2013-10-27 03:09:01 +05:09'", true);
-        assertFunction("DATE '2013-10-27' > TIMESTAMP '2013-10-27 03:08:59 +05:09'", true);
+        assertFunction("DATE '2013-10-27' = TIMESTAMP '2013-10-27 00:00:00 Europe/Berlin'", true);
+        assertFunction("DATE '2013-10-27' < TIMESTAMP '2013-10-27 00:00:01 Europe/Berlin'", true);
+        assertFunction("DATE '2013-10-27' > TIMESTAMP '2013-10-26 23:59:59 Europe/Berlin'", true);
     }
 
     @Test

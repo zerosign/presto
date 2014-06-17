@@ -41,6 +41,7 @@ import java.io.PrintStream;
 
 import static com.facebook.presto.cli.Help.getHelpText;
 import static com.facebook.presto.sql.parser.StatementSplitter.Statement;
+import static com.facebook.presto.sql.parser.StatementSplitter.isEmptyStatement;
 import static com.facebook.presto.sql.parser.StatementSplitter.squeezeStatement;
 import static com.google.common.io.ByteStreams.nullOutputStream;
 import static io.airlift.log.Logging.Level;
@@ -73,6 +74,10 @@ public class Console
         initializeLogging(session.isDebug());
 
         String query = clientOptions.execute;
+        if (hasQuery) {
+            query += ";";
+        }
+
         if (isFromFile) {
             if (hasQuery) {
                 throw new RuntimeException("both --execute and --file specified");
@@ -96,8 +101,7 @@ public class Console
         }
     }
 
-    @SuppressWarnings("fallthrough")
-    private void runConsole(QueryRunner queryRunner, ClientSession session)
+    private static void runConsole(QueryRunner queryRunner, ClientSession session)
     {
         try (TableNameCompleter tableNameCompleter = new TableNameCompleter(queryRunner);
                 LineReader reader = new LineReader(getHistory(), tableNameCompleter)) {
@@ -204,16 +208,21 @@ public class Console
         return session;
     }
 
-    static boolean isSessionParameterChange(Object statement)
+    private static boolean isSessionParameterChange(Object statement)
     {
         return statement instanceof UseCollection;
     }
 
     private static void executeCommand(QueryRunner queryRunner, String query, OutputFormat outputFormat)
     {
-        StatementSplitter splitter = new StatementSplitter(query + ";");
+        StatementSplitter splitter = new StatementSplitter(query);
         for (Statement split : splitter.getCompleteStatements()) {
-            process(queryRunner, split.statement(), outputFormat, false);
+            if (!isEmptyStatement(split.statement())) {
+                process(queryRunner, split.statement(), outputFormat, false);
+            }
+        }
+        if (!isEmptyStatement(splitter.getPartialStatement())) {
+            System.err.println("Non-terminated statement: " + splitter.getPartialStatement());
         }
     }
 

@@ -17,34 +17,26 @@ import com.facebook.presto.OutputBuffers;
 import com.facebook.presto.ScheduledSplit;
 import com.facebook.presto.TaskSource;
 import com.facebook.presto.UnpartitionedPagePartitionFunction;
-import com.facebook.presto.connector.dual.DualConnector;
-import com.facebook.presto.connector.dual.DualDataStreamProvider;
-import com.facebook.presto.connector.dual.DualMetadata;
-import com.facebook.presto.connector.dual.DualSplitManager;
 import com.facebook.presto.event.query.QueryMonitor;
 import com.facebook.presto.execution.TestSqlTaskManager.MockExchangeClientSupplier;
 import com.facebook.presto.index.IndexManager;
 import com.facebook.presto.metadata.ColumnHandle;
-import com.facebook.presto.metadata.InMemoryNodeManager;
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.operator.RecordSinkManager;
-import com.facebook.presto.spi.ConnectorColumnHandle;
-import com.facebook.presto.spi.ConnectorPartitionResult;
 import com.facebook.presto.spi.ConnectorSession;
-import com.facebook.presto.spi.ConnectorSplit;
-import com.facebook.presto.spi.ConnectorSplitSource;
-import com.facebook.presto.spi.SchemaTableName;
-import com.facebook.presto.spi.TupleDomain;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.split.DataStreamManager;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.gen.ExpressionCompiler;
+import com.facebook.presto.sql.planner.CompilerConfig;
 import com.facebook.presto.sql.planner.LocalExecutionPlanner;
 import com.facebook.presto.sql.planner.PlanFragment;
 import com.facebook.presto.sql.planner.PlanFragment.OutputPartitioning;
 import com.facebook.presto.sql.planner.PlanFragment.PlanDistribution;
 import com.facebook.presto.sql.planner.Symbol;
+import com.facebook.presto.sql.planner.TestingColumnHandle;
+import com.facebook.presto.sql.planner.TestingTableHandle;
 import com.facebook.presto.sql.planner.plan.PlanFragmentId;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
@@ -54,7 +46,6 @@ import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Iterables;
 import io.airlift.event.client.NullEventClient;
 import io.airlift.json.ObjectMapperProvider;
 import io.airlift.node.NodeInfo;
@@ -76,15 +67,12 @@ import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static io.airlift.concurrent.Threads.threadsNamed;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
-import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertTrue;
 
 @Test(singleThreaded = true)
 public class TestSqlTaskExecution
 {
-    private static final ConnectorSession SESSION = new ConnectorSession("user", "test", "default", "default", UTC_KEY, Locale.ENGLISH, null, null);
     private TaskExecutor taskExecutor;
-    private ConnectorSplit split;
     private ExecutorService taskNotificationExecutor;
     private SqlTaskExecution taskExecution;
     private OutputBuffers outputBuffers;
@@ -94,35 +82,19 @@ public class TestSqlTaskExecution
     public void setUp()
             throws Exception
     {
-        DualMetadata dualMetadata = new DualMetadata();
-        TableHandle tableHandle = new TableHandle(DualConnector.CONNECTOR_ID, dualMetadata.getTableHandle(SESSION, new SchemaTableName("default", DualMetadata.NAME)));
-        assertNotNull(tableHandle, "tableHandle is null");
-
-        ColumnHandle columnHandle = new ColumnHandle(DualConnector.CONNECTOR_ID, dualMetadata.getColumnHandle(tableHandle.getConnectorHandle(), DualMetadata.COLUMN_NAME));
-        assertNotNull(columnHandle, "columnHandle is null");
-        Symbol symbol = new Symbol(DualMetadata.COLUMN_NAME);
+        Symbol symbol = new Symbol("column");
 
         MetadataManager metadata = new MetadataManager(new FeaturesConfig(), new TypeRegistry());
-        metadata.addGlobalSchemaMetadata(DualConnector.CONNECTOR_ID, dualMetadata);
-
-        DualSplitManager dualSplitManager = new DualSplitManager(new InMemoryNodeManager());
-        ConnectorPartitionResult partitionResult = dualSplitManager.getPartitions(tableHandle.getConnectorHandle(), TupleDomain.<ConnectorColumnHandle>all());
-
-        ConnectorSplitSource splitSource = dualSplitManager.getPartitionSplits(tableHandle.getConnectorHandle(), partitionResult.getPartitions());
-        split = Iterables.getOnlyElement(splitSource.getNextBatch(1));
-        assertTrue(splitSource.isFinished());
-
-        DataStreamManager dataStreamProvider = new DataStreamManager();
-        dataStreamProvider.addConnectorDataStreamProvider(DualConnector.CONNECTOR_ID, new DualDataStreamProvider());
 
         LocalExecutionPlanner planner = new LocalExecutionPlanner(
                 new NodeInfo("test"),
                 metadata,
-                dataStreamProvider,
+                new DataStreamManager(),
                 new IndexManager(),
                 new RecordSinkManager(),
                 new MockExchangeClientSupplier(),
-                new ExpressionCompiler(metadata));
+                new ExpressionCompiler(metadata),
+                new CompilerConfig());
 
         taskExecutor = new TaskExecutor(8);
         taskExecutor.start();
@@ -132,9 +104,9 @@ public class TestSqlTaskExecution
                 new PlanFragmentId("fragment"),
                 new TableScanNode(
                         tableScanNodeId,
-                        tableHandle,
+                        new TableHandle("test", new TestingTableHandle()),
                         ImmutableList.of(symbol),
-                        ImmutableMap.of(symbol, columnHandle),
+                        ImmutableMap.of(symbol, new ColumnHandle("test", new TestingColumnHandle("column"))),
                         null,
                         Optional.<GeneratedPartitions>absent()),
                 ImmutableMap.<Symbol, Type>of(symbol, VARCHAR),
@@ -189,7 +161,7 @@ public class TestSqlTaskExecution
         assertFalse(bufferResult.isBufferClosed());
 
         taskExecution.addSources(ImmutableList.of(new TaskSource(tableScanNodeId, ImmutableSet.<ScheduledSplit>of(), true)));
-        assertEquals(taskExecution.getTaskInfo(false).getState(), TaskState.FINISHED);
+        assertEquals(taskExecution.getTaskInfo().getState(), TaskState.FINISHED);
 
         // buffer will be closed by cancel event (wait for 500 MS for event to fire)
         bufferResult = taskExecution.getResults("out", 0, new DataSize(1, Unit.MEGABYTE), new Duration(500, TimeUnit.MILLISECONDS));
@@ -213,7 +185,7 @@ public class TestSqlTaskExecution
         assertFalse(bufferResult.isBufferClosed());
 
         taskExecution.cancel();
-        assertEquals(taskExecution.getTaskInfo(false).getState(), TaskState.CANCELED);
+        assertEquals(taskExecution.getTaskInfo().getState(), TaskState.CANCELED);
 
         // buffer will be closed by cancel event.  event is async so wait for 500 MS for event to fire
         bufferResult = taskExecution.getResults("out", 0, new DataSize(1, Unit.MEGABYTE), new Duration(500, TimeUnit.MILLISECONDS));
@@ -237,7 +209,7 @@ public class TestSqlTaskExecution
         assertFalse(bufferResult.isBufferClosed());
 
         taskExecution.fail(new Exception("test"));
-        assertEquals(taskExecution.getTaskInfo(false).getState(), TaskState.FAILED);
+        assertEquals(taskExecution.getTaskInfo().getState(), TaskState.FAILED);
 
         // buffer will not be closed by fail event.  event is async so wait for 500 MS for event to fire
         bufferResult = taskExecution.getResults("out", 0, new DataSize(1, Unit.MEGABYTE), new Duration(500, TimeUnit.MILLISECONDS));
