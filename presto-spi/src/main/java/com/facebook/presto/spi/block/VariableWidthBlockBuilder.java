@@ -25,7 +25,7 @@ import java.util.Objects;
 import static io.airlift.slice.SizeOf.SIZE_OF_BYTE;
 
 public class VariableWidthBlockBuilder
-        extends AbstractVariableWidthRandomAccessBlock
+        extends AbstractVariableWidthBlock
         implements BlockBuilder
 {
     private final BlockBuilderStatus blockBuilderStatus;
@@ -49,6 +49,12 @@ public class VariableWidthBlockBuilder
             throw new IllegalArgumentException("position " + position + " must be less than position count " + positions);
         }
         return offsets[position];
+    }
+
+    @Override
+    protected int[] getOffsets()
+    {
+        return offsets;
     }
 
     @Override
@@ -156,9 +162,9 @@ public class VariableWidthBlockBuilder
     }
 
     @Override
-    public RandomAccessBlock build()
+    public Block build()
     {
-        return new VariableWidthRandomAccessBlock(type, sliceOutput.slice(), Arrays.copyOf(offsets, positions));
+        return new VariableWidthBlock(type, positions, sliceOutput.slice(), Arrays.copyOf(offsets, positions));
     }
 
     @Override

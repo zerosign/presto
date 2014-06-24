@@ -13,15 +13,14 @@
  */
 package com.facebook.presto.operator.aggregation.state;
 
-public interface NullableDoubleState
-        extends AccumulatorState
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.METHOD)
+public @interface InitialBooleanValue
 {
-    double getDouble();
-
-    void setDouble(double value);
-
-    @InitialBooleanValue(true)
-    boolean isNull();
-
-    void setNull(boolean value);
+    boolean value();
 }

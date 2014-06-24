@@ -176,7 +176,6 @@ public class StateCompiler
 
         // Generate fields
         List<StateField> fields = enumerateFields(clazz);
-        checkInterface(clazz, fields);
         for (StateField field : fields) {
             generateField(definition, constructor, field);
         }
@@ -196,7 +195,6 @@ public class StateCompiler
                 type(GroupedAccumulator.class));
 
         List<StateField> fields = enumerateFields(clazz);
-        checkInterface(clazz, fields);
 
         // Create constructor
         Block constructor = definition.declareConstructor(new CompilerContext(null), a(PUBLIC))
@@ -253,11 +251,9 @@ public class StateCompiler
                 .putField(field)
                 .ret();
 
-        if (stateField.getInitialValue() != null) {
-            constructor.pushThis()
-                    .push(stateField.getInitialValue())
-                    .putField(field);
-        }
+        constructor.pushThis();
+        pushInitialValue(constructor, stateField);
+        constructor.putField(field);
     }
 
     private static FieldDefinition generateGroupedField(ClassDefinition definition, Block constructor, Block ensureCapacity, StateField stateField)
@@ -297,16 +293,30 @@ public class StateCompiler
         constructor.pushThis()
                 .newObject(field.getType())
                 .dup();
-        if (stateField.getInitialValue() != null) {
-            constructor.push(stateField.getInitialValue());
-        }
-        else {
-            constructor.pushJavaDefault(stateField.getType());
-        }
+        pushInitialValue(constructor, stateField);
         constructor.invokeConstructor(field.getType(), type(stateField.getType()));
         constructor.putField(field);
 
         return field;
+    }
+
+    private static void pushInitialValue(Block block, StateField stateField)
+    {
+        Object initialValue = stateField.getInitialValue();
+        if (initialValue != null) {
+            if (initialValue instanceof Number) {
+                block.push((Number) initialValue);
+            }
+            else if (initialValue instanceof Boolean) {
+                block.push((boolean) initialValue);
+            }
+            else {
+                throw new IllegalArgumentException("Unsupported initial value type: " + initialValue.getClass());
+            }
+        }
+        else {
+            block.pushJavaDefault(stateField.getType());
+        }
     }
 
     private static List<StateField> enumerateFields(Class<?> clazz)
@@ -324,14 +334,23 @@ public class StateCompiler
                 String name = method.getName().substring(3);
                 builder.add(new StateField(name, type, getInitialValue(method)));
             }
+            if (method.getName().startsWith("is")) {
+                Class<?> type = method.getReturnType();
+                checkArgument(type == boolean.class, "Only boolean is support for 'is' methods");
+                String name = method.getName().substring(2);
+                builder.add(new StateField(name, type, getInitialValue(method), method.getName()));
+            }
         }
 
-        return builder.build();
+        ImmutableList<StateField> fields = builder.build();
+        checkInterface(clazz, fields);
+
+        return fields;
     }
 
-    private static Number getInitialValue(Method method)
+    private static Object getInitialValue(Method method)
     {
-        Number value = null;
+        Object value = null;
 
         for (Annotation annotation : method.getAnnotations()) {
             if (annotation instanceof InitialLongValue) {
@@ -344,6 +363,11 @@ public class StateCompiler
                 checkArgument(method.getReturnType() == double.class, "%s does not return a double, but is annotated with @InitialDoubleValue", method.getName());
                 value = ((InitialDoubleValue) annotation).value();
             }
+            else if (annotation instanceof InitialBooleanValue) {
+                checkArgument(value == null, "%s has multiple initialValue annotations", method.getName());
+                checkArgument(method.getReturnType() == boolean.class, "%s does not return a boolean, but is annotated with @InitialBooleanValue", method.getName());
+                value = ((InitialBooleanValue) annotation).value();
+            }
         }
 
         return value;
@@ -354,6 +378,7 @@ public class StateCompiler
         checkArgument(clazz.isInterface(), clazz.getName() + " is not an interface");
         Set<String> setters = new HashSet<>();
         Set<String> getters = new HashSet<>();
+        Set<String> isGetters = new HashSet<>();
 
         Map<String, Class<?>> fieldTypes = new HashMap<>();
         for (StateField field : fields) {
@@ -374,6 +399,14 @@ public class StateCompiler
                 checkArgument(method.getParameterTypes().length == 0, "Expected %s to have zero parameters", method.getName());
                 getters.add(name);
             }
+            else if (method.getName().startsWith("is")) {
+                String name = method.getName().substring(2);
+                checkArgument(fieldTypes.get(name) == boolean.class,
+                        "Expected %s to have type boolean, but found %s", name, fieldTypes.get(name));
+                checkArgument(method.getParameterTypes().length == 0, "Expected %s to have zero parameters", method.getName());
+                checkArgument(method.getReturnType() == boolean.class, "Expected %s to return boolean", method.getName());
+                isGetters.add(name);
+            }
             else if (method.getName().startsWith("set")) {
                 String name = method.getName().substring(3);
                 checkArgument(method.getParameterTypes().length == 1, "Expected setter to have one parameter");
@@ -387,26 +420,33 @@ public class StateCompiler
                 throw new IllegalArgumentException("Cannot generate implementation for method: " + method.getName());
             }
         }
-        checkArgument(getters.size() == setters.size() && setters.size() == fields.size(), "Wrong number of getters/setters");
+        checkArgument(getters.size() + isGetters.size() == setters.size() && setters.size() == fields.size(), "Wrong number of getters/setters");
     }
 
     private static final class StateField
     {
         private final String name;
+        private final String getterName;
         private final Class<?> type;
-        private final Number initialValue;
+        private final Object initialValue;
 
-        private StateField(String name, Class<?> type, Number initialValue)
+        private StateField(String name, Class<?> type, Object initialValue)
+        {
+            this(name, type, initialValue, "get" + name);
+        }
+
+        private StateField(String name, Class<?> type, Object initialValue, String getterName)
         {
             this.name = checkNotNull(name, "name is null");
             checkArgument(!name.isEmpty(), "name is empty");
             this.type = checkNotNull(type, "type is null");
+            this.getterName = checkNotNull(getterName, "getterName is null");
             this.initialValue = initialValue;
         }
 
         public String getGetterName()
         {
-            return "get" + getName();
+            return getterName;
         }
 
         public String getSetterName()
@@ -424,7 +464,7 @@ public class StateCompiler
             return type;
         }
 
-        public Number getInitialValue()
+        public Object getInitialValue()
         {
             return initialValue;
         }

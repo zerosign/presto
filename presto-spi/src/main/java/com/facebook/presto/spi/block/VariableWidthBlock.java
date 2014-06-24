@@ -13,40 +13,35 @@
  */
 package com.facebook.presto.spi.block;
 
-import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.VariableWidthType;
 import io.airlift.slice.Slice;
 
-import static java.util.Objects.requireNonNull;
-
 public class VariableWidthBlock
-        implements Block
+        extends AbstractVariableWidthBlock
 {
     private final int positionCount;
-    private final VariableWidthType type;
     private final Slice slice;
+    private final int[] offsets;
 
-    public VariableWidthBlock(VariableWidthType type, int positionCount, Slice slice)
+    public VariableWidthBlock(VariableWidthType type, int positionCount, Slice slice, int[] offsets)
     {
-        this.type = requireNonNull(type, "type is null");
+        super(type);
 
-        if (positionCount < 0) {
-            throw new IllegalArgumentException("positionCount is negative");
-        }
         this.positionCount = positionCount;
-
-        this.slice = requireNonNull(slice, "data is null");
+        this.slice = slice;
+        this.offsets = offsets;
     }
 
     @Override
-    public Type getType()
+    protected int[] getOffsets()
     {
-        return type;
+        return offsets;
     }
 
-    Slice getRawSlice()
+    @Override
+    protected final int getPositionOffset(int position)
     {
-        return slice;
+        return offsets[position];
     }
 
     @Override
@@ -56,45 +51,17 @@ public class VariableWidthBlock
     }
 
     @Override
-    public int getSizeInBytes()
+    protected Slice getRawSlice()
     {
-        return slice.length();
-    }
-
-    @Override
-    public BlockCursor cursor()
-    {
-        return new VariableWidthBlockCursor(type, positionCount, slice);
-    }
-
-    @Override
-    public BlockEncoding getEncoding()
-    {
-        return new VariableWidthBlockEncoding(getType());
-    }
-
-    @Override
-    public Block getRegion(int positionOffset, int length)
-    {
-        if (positionOffset < 0 || length < 0 || positionOffset + length > positionCount) {
-            throw new IndexOutOfBoundsException("Invalid position " + positionOffset + " in block with " + positionCount + " positions");
-        }
-        return cursor().getRegionAndAdvance(length);
-    }
-
-    @Override
-    public RandomAccessBlock toRandomAccessBlock()
-    {
-        return new VariableWidthRandomAccessBlock(type, positionCount, slice);
+        return slice;
     }
 
     @Override
     public String toString()
     {
-        StringBuilder sb = new StringBuilder("VariableWidthBlock{");
-        sb.append("positionCount=").append(positionCount);
-        sb.append(", type=").append(type);
-        sb.append(", slice=").append(slice);
+        StringBuilder sb = new StringBuilder("VariableWidthRandomAccessBlock{");
+        sb.append("positionCount=").append(getPositionCount());
+        sb.append(", slice=").append(getRawSlice());
         sb.append('}');
         return sb.toString();
     }

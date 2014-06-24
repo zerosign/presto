@@ -21,12 +21,12 @@ import io.airlift.slice.Slices;
 
 import static io.airlift.slice.SizeOf.SIZE_OF_BYTE;
 
-public abstract class AbstractVariableWidthRandomAccessBlock
-        implements RandomAccessBlock
+public abstract class AbstractVariableWidthBlock
+        implements Block
 {
     protected final VariableWidthType type;
 
-    protected AbstractVariableWidthRandomAccessBlock(VariableWidthType type)
+    protected AbstractVariableWidthBlock(VariableWidthType type)
     {
         this.type = type;
     }
@@ -34,6 +34,8 @@ public abstract class AbstractVariableWidthRandomAccessBlock
     protected abstract Slice getRawSlice();
 
     protected abstract int getPositionOffset(int position);
+
+    protected abstract int[] getOffsets();
 
     @Override
     public Type getType()
@@ -50,7 +52,7 @@ public abstract class AbstractVariableWidthRandomAccessBlock
     @Override
     public BlockCursor cursor()
     {
-        return new VariableWidthBlockCursor(type, getPositionCount(), getRawSlice());
+        return new VariableWidthCursor(type, getPositionCount(), getRawSlice(), getOffsets());
     }
 
     @Override
@@ -60,20 +62,13 @@ public abstract class AbstractVariableWidthRandomAccessBlock
     }
 
     @Override
-    public RandomAccessBlock getRegion(int positionOffset, int length)
+    public Block getRegion(int positionOffset, int length)
     {
         int positionCount = getPositionCount();
         if (positionOffset < 0 || length < 0 || positionOffset + length > positionCount) {
             throw new IndexOutOfBoundsException("Invalid position " + positionOffset + " in block with " + positionCount + " positions");
         }
-        // todo add VariableWidthRandomAccessCursor
-        return cursor().getRegionAndAdvance(length).toRandomAccessBlock();
-    }
-
-    @Override
-    public RandomAccessBlock toRandomAccessBlock()
-    {
-        return this;
+        return cursor().getRegionAndAdvance(length);
     }
 
     @Override
@@ -116,20 +111,20 @@ public abstract class AbstractVariableWidthRandomAccessBlock
     }
 
     @Override
-    public RandomAccessBlock getSingleValueBlock(int position)
+    public Block getSingleValueBlock(int position)
     {
         checkReadablePosition(position);
 
         int offset = getPositionOffset(position);
         if (isEntryAtOffsetNull(offset)) {
-            return new VariableWidthRandomAccessBlock(type, 1, Slices.wrappedBuffer(new byte[] {1}));
+            return new VariableWidthBlock(type, 1, Slices.wrappedBuffer(new byte[] {1}), new int[] {0});
         }
 
         int entrySize = valueOffset(type.getLength(getRawSlice(), valueOffset(offset)));
 
         Slice copy = Slices.copyOf(getRawSlice(), offset, entrySize);
 
-        return new VariableWidthRandomAccessBlock(type, 1, copy);
+        return new VariableWidthBlock(type, 1, copy, new int[] {0});
     }
 
     @Override
@@ -141,7 +136,7 @@ public abstract class AbstractVariableWidthRandomAccessBlock
     }
 
     @Override
-    public boolean equalTo(int position, RandomAccessBlock otherBlock, int otherPosition)
+    public boolean equalTo(int position, Block otherBlock, int otherPosition)
     {
         checkReadablePosition(position);
         int leftOffset = getPositionOffset(position);
@@ -201,7 +196,7 @@ public abstract class AbstractVariableWidthRandomAccessBlock
     }
 
     @Override
-    public int compareTo(SortOrder sortOrder, int position, RandomAccessBlock otherBlock, int otherPosition)
+    public int compareTo(SortOrder sortOrder, int position, Block otherBlock, int otherPosition)
     {
         checkReadablePosition(position);
         int leftOffset = getPositionOffset(position);
