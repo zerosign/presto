@@ -31,15 +31,10 @@ public interface Block
     int compareTo(SortOrder sortOrder, int position, Block otherBlock, int otherPosition);
 
     /**
-     * Compares the value at the specified position to the value at the cursor.
-     */
-    int compareTo(SortOrder sortOrder, int position, BlockCursor cursor);
-
-    /**
      * Compares the value at the specified position to the value at the other offset
      * in the other slice.
      */
-    int compareTo(int position, Slice otherSlice, int otherOffset);
+    int compareTo(int position, Slice otherSlice, int otherOffset, int otherLength);
 
     /**
      * Is the value at the specified position equal to the value at the other position
@@ -48,15 +43,10 @@ public interface Block
     boolean equalTo(int position, Block otherBlock, int otherPosition);
 
     /**
-     * Is the value at the specified position equal to the value at the cursor?
-     */
-    boolean equalTo(int position, BlockCursor cursor);
-
-    /**
      * Is the value at the specified position equal to the value at the other offset
      * in the other slice?
      */
-    boolean equalTo(int position, Slice otherSlice, int otherOffset);
+    boolean equalTo(int position, Slice otherSlice, int otherOffset, int otherLength);
 
     /**
      * Gets the value at the specified position as a boolean.
@@ -89,7 +79,7 @@ public interface Block
     /**
      * Gets the value at the specified position as a single element block.
      *
-     * @throws IllegalStateException if this cursor is not at a valid position
+     * @throws IllegalArgumentException if this position is not valid
      */
     Block getSingleValueBlock(int position);
 
@@ -114,11 +104,6 @@ public interface Block
      * Returns the size of this block in memory.
      */
     int getSizeInBytes();
-
-    /**
-     * Gets a cursor over the block.
-     */
-    BlockCursor cursor();
 
     /**
      * Get the encoding for this block.

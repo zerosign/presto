@@ -17,22 +17,13 @@ import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
-import com.facebook.presto.spi.block.BlockCursor;
 import com.facebook.presto.spi.type.Type;
-import com.google.common.base.Function;
-import com.google.common.collect.ContiguousSet;
-import com.google.common.collect.DiscreteDomain;
-import com.google.common.collect.Iterables;
-import com.google.common.collect.Range;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
-
-import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 
@@ -44,8 +35,6 @@ import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.assertFalse;
-import static org.testng.Assert.assertTrue;
 
 public final class BlockAssertions
 {
@@ -58,33 +47,15 @@ public final class BlockAssertions
     public static Object getOnlyValue(Block block)
     {
         assertEquals(block.getPositionCount(), 1, "Block positions");
-
-        BlockCursor cursor = block.cursor();
-        assertTrue(cursor.advanceNextPosition());
-        Object value = cursor.getObjectValue(SESSION);
-        assertFalse(cursor.advanceNextPosition());
-
-        return value;
-    }
-
-    public static void assertBlocksEquals(BlockIterable actual, BlockIterable expected)
-    {
-        Iterator<Block> expectedIterator = expected.iterator();
-        for (Block actualBlock : actual) {
-            assertTrue(expectedIterator.hasNext());
-            Block expectedBlock = expectedIterator.next();
-            assertBlockEquals(actualBlock, expectedBlock);
-        }
-        assertFalse(expectedIterator.hasNext());
+        return block.getObjectValue(SESSION, 0);
     }
 
     public static List<Object> toValues(BlockIterable blocks)
     {
         List<Object> values = new ArrayList<>();
         for (Block block : blocks) {
-            BlockCursor cursor = block.cursor();
-            while (cursor.advanceNextPosition()) {
-                values.add(cursor.getObjectValue(SESSION));
+            for (int position = 0; position < block.getPositionCount(); position++) {
+                values.add(block.getObjectValue(SESSION, position));
             }
         }
         return Collections.unmodifiableList(values);
@@ -92,15 +63,9 @@ public final class BlockAssertions
 
     public static List<Object> toValues(Block block)
     {
-        BlockCursor cursor = block.cursor();
-        return toValues(cursor);
-    }
-
-    public static List<Object> toValues(BlockCursor cursor)
-    {
         List<Object> values = new ArrayList<>();
-        while (cursor.advanceNextPosition()) {
-            values.add(cursor.getObjectValue(SESSION));
+        for (int position = 0; position < block.getPositionCount(); position++) {
+            values.add(block.getObjectValue(SESSION, position));
         }
         return Collections.unmodifiableList(values);
     }
@@ -108,76 +73,10 @@ public final class BlockAssertions
     public static void assertBlockEquals(Block actual, Block expected)
     {
         assertEquals(actual.getType(), expected.getType());
-        assertCursorsEquals(actual.cursor(), expected.cursor());
-    }
 
-    public static void assertCursorsEquals(BlockCursor actualCursor, BlockCursor expectedCursor)
-    {
-        assertEquals(actualCursor.getType(), expectedCursor.getType());
-        while (advanceAllCursorsToNextPosition(actualCursor, expectedCursor)) {
-            assertEquals(actualCursor.getObjectValue(SESSION), expectedCursor.getObjectValue(SESSION));
+        for (int position = 0; position < actual.getPositionCount(); position++) {
+            assertEquals(actual.getObjectValue(SESSION, position), expected.getObjectValue(SESSION, position));
         }
-        assertTrue(actualCursor.isFinished());
-        assertTrue(expectedCursor.isFinished());
-    }
-
-    public static boolean advanceAllCursorsToNextPosition(BlockCursor... cursors)
-    {
-        boolean allAdvanced = true;
-        for (BlockCursor cursor : cursors) {
-            allAdvanced = cursor.advanceNextPosition() && allAdvanced;
-        }
-        return allAdvanced;
-    }
-
-    public static Iterable<Long> createLongSequence(long start, long end)
-    {
-        return ContiguousSet.create(Range.closedOpen(start, end), DiscreteDomain.longs());
-    }
-
-    public static Iterable<Double> createDoubleSequence(long start, long end)
-    {
-        return Iterables.transform(createLongSequence(start, end), new Function<Long, Double>()
-        {
-            @Override
-            public Double apply(Long input)
-            {
-                return (double) input;
-            }
-        });
-    }
-
-    public static Iterable<String> createStringSequence(long start, long end)
-    {
-        return Iterables.transform(createLongSequence(start, end), new Function<Long, String>()
-        {
-            @Override
-            public String apply(Long input)
-            {
-                return String.valueOf(input);
-            }
-        });
-    }
-
-    public static Iterable<Long> createLongNullSequence(int count)
-    {
-        Long[] values = new Long[count];
-        Arrays.fill(values, null);
-        return Arrays.asList(values);
-    }
-
-    public static Iterable<Double> createDoubleNullSequence(int count)
-    {
-        Double[] values = new Double[count];
-        Arrays.fill(values, null);
-        return Arrays.asList(values);
-    }
-
-    public static Iterable<String> createStringNullSequence(int count)
-    {
-        String[] values = new String[count];
-        Arrays.fill(values, null);
-        return Arrays.asList(values);
     }
 
     public static Block createStringsBlock(String... values)
@@ -201,11 +100,6 @@ public final class BlockAssertions
         }
 
         return builder.build();
-    }
-
-    public static BlockIterable createStringsBlockIterable(@Nullable String... values)
-    {
-        return createBlockIterable(createStringsBlock(values));
     }
 
     public static Block createStringSequenceBlock(int start, int end)
@@ -282,16 +176,6 @@ public final class BlockAssertions
         return builder.build();
     }
 
-    public static BlockIterable createLongsBlockIterable(int... values)
-    {
-        return createBlockIterable(createLongsBlock(values));
-    }
-
-    public static BlockIterable createLongsBlockIterable(@Nullable Long... values)
-    {
-        return createBlockIterable(createLongsBlock(values));
-    }
-
     public static Block createLongSequenceBlock(int start, int end)
     {
         BlockBuilder builder = BIGINT.createBlockBuilder(new BlockBuilderStatus());
@@ -335,11 +219,6 @@ public final class BlockAssertions
         }
 
         return builder.build();
-    }
-
-    public static BlockIterable createDoublesBlockIterable(@Nullable Double... values)
-    {
-        return createBlockIterable(createDoublesBlock(values));
     }
 
     public static Block createDoubleSequenceBlock(int start, int end)

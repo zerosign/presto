@@ -16,7 +16,6 @@ package com.facebook.presto.block.dictionary;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.BlockCursor;
 import com.facebook.presto.spi.block.BlockEncoding;
 import com.facebook.presto.spi.block.SortOrder;
 import com.facebook.presto.spi.type.Type;
@@ -81,12 +80,6 @@ public class DictionaryEncodedBlock
     }
 
     @Override
-    public DictionaryEncodedBlockCursor cursor()
-    {
-        return new DictionaryEncodedBlockCursor(dictionary, idBlock.cursor());
-    }
-
-    @Override
     public boolean getBoolean(int position)
     {
         return dictionary.getBoolean(getDictionaryKey(position));
@@ -135,15 +128,9 @@ public class DictionaryEncodedBlock
     }
 
     @Override
-    public boolean equalTo(int position, BlockCursor value)
+    public boolean equalTo(int position, Slice otherSlice, int otherOffset, int otherLength)
     {
-        return dictionary.equalTo(getDictionaryKey(position), value);
-    }
-
-    @Override
-    public boolean equalTo(int position, Slice otherSlice, int otherOffset)
-    {
-        return dictionary.equalTo(getDictionaryKey(position), otherSlice, otherOffset);
+        return dictionary.equalTo(getDictionaryKey(position), otherSlice, otherOffset, otherLength);
     }
 
     @Override
@@ -159,15 +146,9 @@ public class DictionaryEncodedBlock
     }
 
     @Override
-    public int compareTo(SortOrder sortOrder, int position, BlockCursor cursor)
+    public int compareTo(int position, Slice otherSlice, int otherOffset, int otherLength)
     {
-        return dictionary.compareTo(sortOrder, getDictionaryKey(position), cursor);
-    }
-
-    @Override
-    public int compareTo(int position, Slice otherSlice, int otherOffset)
-    {
-        return dictionary.compareTo(getDictionaryKey(position), otherSlice, otherOffset);
+        return dictionary.compareTo(getDictionaryKey(position), otherSlice, otherOffset, otherLength);
     }
 
     @Override

@@ -16,7 +16,6 @@ package com.facebook.presto.block.rle;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.BlockCursor;
 import com.facebook.presto.spi.block.SortOrder;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.base.Objects;
@@ -25,7 +24,6 @@ import io.airlift.slice.Slice;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkPositionIndexes;
-import static com.google.common.base.Preconditions.checkState;
 
 public class RunLengthEncodedBlock
         implements Block
@@ -138,17 +136,10 @@ public class RunLengthEncodedBlock
     }
 
     @Override
-    public boolean equalTo(int position, BlockCursor cursor)
+    public boolean equalTo(int position, Slice otherSlice, int otherOffset, int otherLength)
     {
         checkReadablePosition(position);
-        return this.value.equalTo(0, cursor);
-    }
-
-    @Override
-    public boolean equalTo(int position, Slice otherSlice, int otherOffset)
-    {
-        checkReadablePosition(position);
-        return value.equalTo(0, otherSlice, otherOffset);
+        return value.equalTo(0, otherSlice, otherOffset, otherLength);
     }
 
     @Override
@@ -166,17 +157,10 @@ public class RunLengthEncodedBlock
     }
 
     @Override
-    public int compareTo(SortOrder sortOrder, int position, BlockCursor cursor)
+    public int compareTo(int position, Slice otherSlice, int otherOffset, int otherLength)
     {
         checkReadablePosition(position);
-        return value.compareTo(sortOrder, 0, cursor);
-    }
-
-    @Override
-    public int compareTo(int position, Slice otherSlice, int otherOffset)
-    {
-        checkReadablePosition(position);
-        return value.compareTo(0, otherSlice, otherOffset);
+        return value.compareTo(0, otherSlice, otherOffset, otherLength);
     }
 
     @Override
@@ -194,14 +178,8 @@ public class RunLengthEncodedBlock
                 .toString();
     }
 
-    @Override
-    public RunLengthEncodedBlockCursor cursor()
-    {
-        return new RunLengthEncodedBlockCursor(value, positionCount);
-    }
-
     private void checkReadablePosition(int position)
     {
-        checkState(position >= 0 && position < positionCount, "position is not valid");
+        checkArgument(position >= 0 && position < positionCount, "position is not valid");
     }
 }
