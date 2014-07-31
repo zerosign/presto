@@ -20,6 +20,7 @@ import com.facebook.presto.byteCode.Variable;
 import com.facebook.presto.byteCode.control.IfStatement;
 import com.facebook.presto.byteCode.control.LookupSwitch;
 import com.facebook.presto.byteCode.instruction.LabelNode;
+import com.facebook.presto.metadata.FunctionInfo;
 import com.facebook.presto.metadata.OperatorType;
 import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.spi.type.Type;
@@ -38,6 +39,8 @@ import static com.facebook.presto.byteCode.OpCodes.NOP;
 import static com.facebook.presto.byteCode.control.IfStatement.ifStatementBuilder;
 import static com.facebook.presto.byteCode.control.LookupSwitch.lookupSwitchBuilder;
 import static com.facebook.presto.byteCode.instruction.JumpInstruction.jump;
+import static com.facebook.presto.sql.gen.ByteCodeUtils.invoke;
+import static com.facebook.presto.sql.gen.ByteCodeUtils.loadConstant;
 import static com.facebook.presto.sql.gen.ByteCodeUtils.ifWasNullPopAndGoto;
 
 public class InCodeGenerator
@@ -59,11 +62,7 @@ public class InCodeGenerator
         Type type = arguments.get(0).getType();
         Class<?> javaType = type.getJavaType();
 
-        FunctionBinding hashCodeFunction = generatorContext.getBootstrapBinder().bindOperator(
-                OperatorType.HASH_CODE,
-                generatorContext.generateGetSession(),
-                ImmutableList.<ByteCodeNode>of(NOP),
-                ImmutableList.of(type));
+        FunctionInfo hashCodeFunction = generatorContext.getRegistry().resolveOperator(OperatorType.HASH_CODE, ImmutableList.of(type));
 
         ImmutableListMultimap.Builder<Integer, ByteCodeNode> hashBucketsBuilder = ImmutableListMultimap.builder();
         ImmutableList.Builder<ByteCodeNode> defaultBucket = ImmutableList.builder();
@@ -78,7 +77,7 @@ public class InCodeGenerator
                 constantValuesBuilder.add(object);
 
                 try {
-                    int hashCode = (int) hashCodeFunction.getCallSite().dynamicInvoker().invoke(object);
+                    int hashCode = (int) hashCodeFunction.getMethodHandle().invoke(object);
                     hashBucketsBuilder.put(hashCode, testByteCode);
                 }
                 catch (Throwable throwable) {
@@ -115,17 +114,21 @@ public class InCodeGenerator
             }
             switchBuilder.defaultCase(defaultLabel);
 
+            Binding hashCodeBinding = generatorContext
+                    .getCallSiteBinder()
+                    .bind(hashCodeFunction.getMethodHandle());
+
             switchBlock = new Block(context)
                     .comment("lookupSwitch(hashCode(<stackValue>))")
                     .dup(javaType)
-                    .invokeDynamic(hashCodeFunction.getName(), hashCodeFunction.getCallSite().type(), hashCodeFunction.getBindingId())
+                    .append(invoke(generatorContext.getContext(), hashCodeBinding))
                     .append(switchBuilder.build())
                     .append(switchCaseBlocks);
         }
         else {
             // TODO: replace Set with fastutils (or similar) primitive sets if types are primitive
             // for huge IN lists, use a Set
-            FunctionBinding constant = generatorContext.getBootstrapBinder().bindConstant(constantValues, Set.class);
+            Binding constant = generatorContext.getCallSiteBinder().bind(constantValues, Set.class);
 
             switchBlock = new Block(context)
                     .comment("inListSet.contains(<stackValue>)")
@@ -135,10 +138,7 @@ public class InCodeGenerator
                                     .dup(javaType)
                                     .append(ByteCodeUtils.boxPrimitive(context, javaType))
                                     .comment("set")
-                                    .invokeDynamic(
-                                            constant.getName(),
-                                            constant.getCallSite().type(),
-                                            constant.getBindingId())
+                                    .append(loadConstant(context, constant))
                                     // TODO: use invokeVirtual on the set instead. This requires swapping the two elements in the stack
                                     .invokeStatic(CompilerOperations.class, "in", boolean.class, Object.class, Set.class),
                             jump(match),
@@ -208,11 +208,11 @@ public class InCodeGenerator
 
         elseBlock.gotoLabel(noMatchLabel);
 
-        FunctionBinding equalsFunction = generatorContext.getBootstrapBinder().bindOperator(
-                OperatorType.EQUAL,
-                generatorContext.generateGetSession(),
-                ImmutableList.<ByteCodeNode>of(NOP, NOP),
-                ImmutableList.of(type, type));
+        FunctionInfo operator = generatorContext.getRegistry().resolveOperator(OperatorType.EQUAL, ImmutableList.of(type, type));
+
+        Binding equalsFunction = generatorContext
+                .getCallSiteBinder()
+                .bind(operator.getMethodHandle());
 
         ByteCodeNode elseNode = elseBlock;
         for (ByteCodeNode testNode : testValues) {
@@ -229,7 +229,7 @@ public class InCodeGenerator
                         .putVariable(caseWasNull.getLocalVariableDefinition())
                         .append(ifWasNullPopAndGoto(context, elseLabel, void.class, type.getJavaType(), type.getJavaType()));
             }
-            condition.invokeDynamic(equalsFunction.getName(), equalsFunction.getCallSite().type(), equalsFunction.getBindingId());
+            condition.append(invoke(generatorContext.getContext(), equalsFunction));
             test.condition(condition);
 
             test.ifTrue(new Block(context).gotoLabel(matchLabel));

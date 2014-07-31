@@ -19,6 +19,7 @@ import com.facebook.presto.operator.scalar.ColorFunctions;
 import com.facebook.presto.operator.scalar.DateTimeFunctions;
 import com.facebook.presto.operator.scalar.HyperLogLogFunctions;
 import com.facebook.presto.operator.scalar.JsonFunctions;
+import com.facebook.presto.operator.scalar.JsonPath;
 import com.facebook.presto.operator.scalar.MathFunctions;
 import com.facebook.presto.operator.scalar.RegexpFunctions;
 import com.facebook.presto.operator.scalar.ScalarFunction;
@@ -59,8 +60,6 @@ import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.StandardErrorCode;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
-import com.facebook.presto.sql.gen.DefaultFunctionBinder;
-import com.facebook.presto.sql.gen.FunctionBinder;
 import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.type.BigintOperators;
 import com.facebook.presto.type.BooleanOperators;
@@ -69,6 +68,7 @@ import com.facebook.presto.type.DateTimeOperators;
 import com.facebook.presto.type.DoubleOperators;
 import com.facebook.presto.type.IntervalDayTimeOperators;
 import com.facebook.presto.type.IntervalYearMonthOperators;
+import com.facebook.presto.type.LikeFunctions;
 import com.facebook.presto.type.SqlType;
 import com.facebook.presto.type.TimeOperators;
 import com.facebook.presto.type.TimeWithTimeZoneOperators;
@@ -94,6 +94,7 @@ import com.google.common.collect.Multimap;
 import com.google.common.collect.Multimaps;
 import com.google.common.primitives.Primitives;
 import io.airlift.slice.Slice;
+import org.joni.Regex;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
@@ -102,7 +103,6 @@ import java.lang.annotation.Annotation;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.AnnotatedElement;
-import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
@@ -111,6 +111,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import static com.facebook.presto.metadata.FunctionInfo.isAggregationPredicate;
 import static com.facebook.presto.metadata.FunctionInfo.isHiddenPredicate;
@@ -170,6 +171,9 @@ import static com.facebook.presto.spi.type.TimeWithTimeZoneType.TIME_WITH_TIME_Z
 import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
 import static com.facebook.presto.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
+import static com.facebook.presto.type.JsonPathType.JSON_PATH;
+import static com.facebook.presto.type.LikePatternType.LIKE_PATTERN;
+import static com.facebook.presto.type.RegexpType.REGEXP;
 import static com.facebook.presto.type.UnknownType.UNKNOWN;
 import static com.google.common.base.CaseFormat.LOWER_CAMEL;
 import static com.google.common.base.CaseFormat.LOWER_UNDERSCORE;
@@ -184,6 +188,9 @@ import static java.lang.invoke.MethodHandles.lookup;
 public class FunctionRegistry
 {
     private static final String MAGIC_LITERAL_FUNCTION_PREFIX = "$literal$";
+
+    // hack: java classes for types that can be used with magic literals
+    private static final Set<Class<?>> SUPPORTED_LITERAL_TYPES = ImmutableSet.<Class<?>>of(long.class, double.class, Slice.class, boolean.class);
 
     private final TypeManager typeManager;
     private volatile FunctionMap functions = new FunctionMap();
@@ -299,7 +306,8 @@ public class FunctionRegistry
                 .scalar(IntervalYearMonthOperators.class)
                 .scalar(TimeWithTimeZoneOperators.class)
                 .scalar(TimestampWithTimeZoneOperators.class)
-                .scalar(DateTimeOperators.class);
+                .scalar(DateTimeOperators.class)
+                .scalar(LikeFunctions.class);
 
         if (experimentalSyntaxEnabled) {
             builder.approximateAggregate("avg", VARCHAR, ImmutableList.of(BIGINT), VARCHAR, LONG_APPROXIMATE_AVERAGE_AGGREGATION)
@@ -397,7 +405,7 @@ public class FunctionRegistry
                     true,
                     identity,
                     true,
-                    new DefaultFunctionBinder(identity, false));
+                    false);
         }
 
         throw new PrestoException(StandardErrorCode.FUNCTION_NOT_FOUND.toErrorCode(), message);
@@ -430,6 +438,11 @@ public class FunctionRegistry
         throw new OperatorNotFoundException(operatorType, argumentTypes);
     }
 
+    public FunctionInfo getCoercion(Type fromType, Type toType)
+    {
+        return getExactOperator(OperatorType.CAST, ImmutableList.of(fromType), toType);
+    }
+
     public FunctionInfo getExactOperator(OperatorType operatorType, List<? extends Type> argumentTypes, Type returnType)
             throws OperatorNotFoundException
     {
@@ -445,7 +458,7 @@ public class FunctionRegistry
         // if identity cast, return a custom operator info
         if ((operatorType == OperatorType.CAST) && (argumentTypes.size() == 1) && argumentTypes.get(0).equals(returnType)) {
             MethodHandle identity = MethodHandles.identity(returnType.getJavaType());
-            return operatorInfo(OperatorType.CAST, returnType, argumentTypes, identity, new DefaultFunctionBinder(identity, false));
+            return operatorInfo(OperatorType.CAST, returnType, argumentTypes, identity, false);
         }
 
         throw new OperatorNotFoundException(operatorType, argumentTypes, returnType);
@@ -496,6 +509,19 @@ public class FunctionRegistry
         if (actualType.equals(TIMESTAMP) && expectedType.equals(TIMESTAMP_WITH_TIME_ZONE)) {
             return true;
         }
+
+        if (actualType.equals(VARCHAR) && expectedType.equals(REGEXP)) {
+            return true;
+        }
+
+        if (actualType.equals(VARCHAR) && expectedType.equals(LIKE_PATTERN)) {
+            return true;
+        }
+
+        if (actualType.equals(VARCHAR) && expectedType.equals(JSON_PATH)) {
+            return true;
+        }
+
         return false;
     }
 
@@ -595,9 +621,12 @@ public class FunctionRegistry
     {
         return new Signature(MAGIC_LITERAL_FUNCTION_PREFIX + type.getName(),
                 type,
-                ImmutableList.of(type(type.getJavaType())),
-                false,
-                false);
+                ImmutableList.of(type(type.getJavaType())));
+    }
+
+    public static boolean isSupportedLiteralType(Type type)
+    {
+        return SUPPORTED_LITERAL_TYPES.contains(type.getJavaType());
     }
 
     public static class FunctionListBuilder
@@ -608,7 +637,7 @@ public class FunctionRegistry
         public FunctionListBuilder window(String name, Type returnType, List<? extends Type> argumentTypes, Class<? extends WindowFunction> functionClass)
         {
             WindowFunctionSupplier windowFunctionSupplier = new ReflectionWindowFunctionSupplier<>(
-                    new Signature(name, returnType, ImmutableList.copyOf(argumentTypes), false),
+                    new Signature(name, returnType, ImmutableList.copyOf(argumentTypes)),
                     functionClass);
 
             functions.add(new FunctionInfo(windowFunctionSupplier.getSignature(), windowFunctionSupplier.getDescription(), windowFunctionSupplier));
@@ -631,19 +660,19 @@ public class FunctionRegistry
             name = name.toLowerCase();
 
             String description = getDescription(function.getClass());
-            functions.add(new FunctionInfo(new Signature(name, returnType, ImmutableList.copyOf(argumentTypes), approximate, false), description, intermediateType, function));
+            functions.add(new FunctionInfo(new Signature(name, returnType, ImmutableList.copyOf(argumentTypes)), description, intermediateType, function, approximate));
             return this;
         }
 
-        public FunctionListBuilder scalar(Signature signature, MethodHandle function, boolean deterministic, FunctionBinder functionBinder, String description, boolean hidden)
+        public FunctionListBuilder scalar(Signature signature, MethodHandle function, boolean deterministic, String description, boolean hidden, boolean nullable)
         {
-            functions.add(new FunctionInfo(signature, description, hidden, function, deterministic, functionBinder));
+            functions.add(new FunctionInfo(signature, description, hidden, function, deterministic, nullable));
             return this;
         }
 
-        private FunctionListBuilder operator(OperatorType operatorType, Type returnType, List<Type> parameterTypes, MethodHandle function, FunctionBinder functionBinder)
+        private FunctionListBuilder operator(OperatorType operatorType, Type returnType, List<Type> parameterTypes, MethodHandle function, boolean nullable)
         {
-            FunctionInfo operatorInfo = operatorInfo(operatorType, returnType, parameterTypes, function, functionBinder);
+            FunctionInfo operatorInfo = operatorInfo(operatorType, returnType, parameterTypes, function, nullable);
             operators.put(operatorType, operatorInfo);
             functions.add(operatorInfo);
             return this;
@@ -681,15 +710,13 @@ public class FunctionRegistry
             SqlType returnTypeAnnotation = method.getAnnotation(SqlType.class);
             checkArgument(returnTypeAnnotation != null, "Method %s return type does not have a @SqlType annotation", method);
             Type returnType = type(returnTypeAnnotation);
-            Signature signature = new Signature(name.toLowerCase(), returnType, parameterTypes(method), false, false);
+            Signature signature = new Signature(name.toLowerCase(), returnType, parameterTypes(method));
 
             verifyMethodSignature(method, signature.getReturnType(), signature.getArgumentTypes());
 
-            FunctionBinder functionBinder = createFunctionBinder(method, scalarFunction.functionBinder());
-
-            scalar(signature, methodHandle, scalarFunction.deterministic(), functionBinder, getDescription(method), scalarFunction.hidden());
+            scalar(signature, methodHandle, scalarFunction.deterministic(), getDescription(method), scalarFunction.hidden(), method.isAnnotationPresent(Nullable.class));
             for (String alias : scalarFunction.alias()) {
-                scalar(signature.withAlias(alias.toLowerCase()), methodHandle, scalarFunction.deterministic(), functionBinder, getDescription(method), scalarFunction.hidden());
+                scalar(signature.withAlias(alias.toLowerCase()), methodHandle, scalarFunction.deterministic(), getDescription(method), scalarFunction.hidden(), method.isAnnotationPresent(Nullable.class));
             }
             return true;
         }
@@ -720,30 +747,8 @@ public class FunctionRegistry
                 verifyMethodSignature(method, returnType, parameterTypes);
             }
 
-            FunctionBinder functionBinder = createFunctionBinder(method, scalarOperator.functionBinder());
-
-            operator(operatorType, returnType, parameterTypes, methodHandle, functionBinder);
+            operator(operatorType, returnType, parameterTypes, methodHandle, method.isAnnotationPresent(Nullable.class));
             return true;
-        }
-
-        private FunctionBinder createFunctionBinder(Method method, Class<? extends FunctionBinder> functionBinderClass)
-        {
-            try {
-                // look for <init>(MethodHandle,boolean)
-                Constructor<? extends FunctionBinder> constructor = functionBinderClass.getConstructor(MethodHandle.class, boolean.class);
-                return constructor.newInstance(lookup().unreflect(method), method.isAnnotationPresent(Nullable.class));
-            }
-            catch (ReflectiveOperationException | RuntimeException ignored) {
-            }
-
-            try {
-                // try with default constructor
-                return functionBinderClass.newInstance();
-            }
-            catch (Exception e) {
-            }
-
-            throw new IllegalArgumentException("Unable to create function binder " + functionBinderClass.getName() + " for function " + method);
         }
 
         private static String getDescription(AnnotatedElement annotatedElement)
@@ -757,8 +762,24 @@ public class FunctionRegistry
             return LOWER_CAMEL.to(LOWER_UNDERSCORE, name);
         }
 
-        private static final Set<Class<?>> SUPPORTED_TYPES = ImmutableSet.<Class<?>>of(long.class, double.class, Slice.class, boolean.class);
-        private static final Set<Class<?>> SUPPORTED_RETURN_TYPES = ImmutableSet.<Class<?>>of(long.class, double.class, Slice.class, boolean.class, int.class);
+        private static final Set<Class<?>> SUPPORTED_TYPES = ImmutableSet.of(
+                long.class,
+                double.class,
+                Slice.class,
+                boolean.class,
+                Pattern.class,
+                Regex.class,
+                JsonPath.class);
+
+        private static final Set<Class<?>> SUPPORTED_RETURN_TYPES = ImmutableSet.of(
+                long.class,
+                double.class,
+                Slice.class,
+                boolean.class,
+                int.class,
+                Pattern.class,
+                Regex.class,
+                JsonPath.class);
 
         private static void checkValidMethod(Method method)
         {
@@ -790,12 +811,12 @@ public class FunctionRegistry
         }
     }
 
-    private static FunctionInfo operatorInfo(OperatorType operatorType, Type returnType, List<? extends Type> argumentTypes, MethodHandle method, FunctionBinder functionBinder)
+    private static FunctionInfo operatorInfo(OperatorType operatorType, Type returnType, List<? extends Type> argumentTypes, MethodHandle method, boolean nullable)
     {
         operatorType.validateSignature(returnType, ImmutableList.copyOf(argumentTypes));
 
-        Signature signature = new Signature(operatorType.name(), returnType, argumentTypes, false, true);
-        return new FunctionInfo(signature, operatorType.getOperator(), true, method, true, functionBinder);
+        Signature signature = new Signature(operatorType.name(), returnType, argumentTypes, true);
+        return new FunctionInfo(signature, operatorType.getOperator(), true, method, true, nullable);
     }
 
     private static void verifyMethodSignature(Method method, Type returnType, List<Type> argumentTypes)

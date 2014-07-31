@@ -15,7 +15,6 @@ package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.DistinctLimitNode;
-import com.facebook.presto.sql.planner.plan.MaterializeSampleNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.IndexJoinNode;
@@ -105,10 +104,6 @@ public final class PlanSanityChecker
 
             Preconditions.checkArgument(source.getOutputSymbols().containsAll(node.getDistinctSymbols()), "Invalid node. Mark distinct symbols (%s) not in source plan output (%s)", node.getDistinctSymbols(), source.getOutputSymbols());
 
-            if (node.getSampleWeightSymbol().isPresent()) {
-                Preconditions.checkArgument(source.getOutputSymbols().contains(node.getSampleWeightSymbol().get()), "Invalid node. Sample weight symbol (%s) is not in source plan output (%s)", node.getSampleWeightSymbol().get(), node.getSource().getOutputSymbols());
-            }
-
             return null;
         }
 
@@ -189,10 +184,6 @@ public final class PlanSanityChecker
                     node.getOrderBy(),
                     node.getSource().getOutputSymbols());
 
-            if (node.getSampleWeight().isPresent()) {
-                Preconditions.checkArgument(source.getOutputSymbols().contains(node.getSampleWeight().get()), "Invalid node. Sample weight symbol (%s) is not in source plan output (%s)", node.getSampleWeight().get(), node.getSource().getOutputSymbols());
-            }
-
             return null;
         }
 
@@ -207,17 +198,6 @@ public final class PlanSanityChecker
             Preconditions.checkArgument(source.getOutputSymbols().containsAll(node.getOutputSymbols()), "Invalid node. Output symbols (%s) not in source plan output (%s)", node.getOutputSymbols(), node.getSource().getOutputSymbols());
             Preconditions.checkArgument(source.getOutputSymbols().containsAll(node.getOrderBy()), "Invalid node. Order by dependencies (%s) not in source plan output (%s)", node.getOrderBy(), node.getSource().getOutputSymbols());
 
-            return null;
-        }
-
-        @Override
-        public Void visitMaterializeSample(MaterializeSampleNode node, Void context)
-        {
-            PlanNode source = node.getSource();
-            source.accept(this, context);
-            verifyUniqueId(node);
-
-            Preconditions.checkArgument(source.getOutputSymbols().contains(node.getSampleWeightSymbol()), "Invalid node. Sample weight symbol (%s) not in source plan output (%s)", node.getSampleWeightSymbol(), source.getOutputSymbols());
             return null;
         }
 
@@ -241,10 +221,6 @@ public final class PlanSanityChecker
             source.accept(this, context); // visit child
 
             verifyUniqueId(node);
-
-            if (node.getSampleWeight().isPresent()) {
-                Preconditions.checkArgument(source.getOutputSymbols().contains(node.getSampleWeight().get()), "Invalid node. Sample weight symbol (%s) is not in source plan output (%s)", node.getSampleWeight().get(), node.getSource().getOutputSymbols());
-            }
 
             return null;
         }

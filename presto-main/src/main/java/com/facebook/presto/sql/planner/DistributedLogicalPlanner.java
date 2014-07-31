@@ -28,7 +28,6 @@ import com.facebook.presto.sql.planner.plan.IndexJoinNode;
 import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.LimitNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
-import com.facebook.presto.sql.planner.plan.MaterializeSampleNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
 import com.facebook.presto.sql.planner.plan.PlanFragmentId;
 import com.facebook.presto.sql.planner.plan.PlanNode;
@@ -153,7 +152,7 @@ public class DistributedLogicalPlanner
                 }
             }
             if (createSingleNodePlan || alreadyPartitioned || !current.isDistributed()) {
-                MarkDistinctNode markNode = new MarkDistinctNode(idAllocator.getNextId(), current.getRoot(), node.getMarkerSymbol(), node.getDistinctSymbols(), node.getSampleWeightSymbol());
+                MarkDistinctNode markNode = new MarkDistinctNode(idAllocator.getNextId(), current.getRoot(), node.getMarkerSymbol(), node.getDistinctSymbols());
                 current.setRoot(markNode);
                 return current;
             }
@@ -163,7 +162,7 @@ public class DistributedLogicalPlanner
                         .setHashOutputPartitioning(node.getDistinctSymbols());
 
                 PlanNode exchange = new ExchangeNode(idAllocator.getNextId(), current.getId(), sink.getOutputSymbols());
-                MarkDistinctNode markNode = new MarkDistinctNode(idAllocator.getNextId(), exchange, node.getMarkerSymbol(), node.getDistinctSymbols(), node.getSampleWeightSymbol());
+                MarkDistinctNode markNode = new MarkDistinctNode(idAllocator.getNextId(), exchange, node.getMarkerSymbol(), node.getDistinctSymbols());
                 return createFixedDistributionPlan(markNode)
                         .addChild(current.build());
             }
@@ -266,14 +265,6 @@ public class DistributedLogicalPlanner
         }
 
         @Override
-        public SubPlanBuilder visitMaterializeSample(MaterializeSampleNode node, Void context)
-        {
-            SubPlanBuilder current = node.getSource().accept(this, context);
-            current.setRoot(new MaterializeSampleNode(node.getId(), current.getRoot(), node.getSampleWeightSymbol()));
-            return current;
-        }
-
-        @Override
         public SubPlanBuilder visitProject(ProjectNode node, Void context)
         {
             SubPlanBuilder current = node.getSource().accept(this, context);
@@ -289,14 +280,14 @@ public class DistributedLogicalPlanner
             // use partial TopN plan if distributed
             boolean partial = current.isDistributed();
 
-            current.setRoot(new TopNNode(node.getId(), current.getRoot(), node.getCount(), node.getOrderBy(), node.getOrderings(), partial, node.getSampleWeight()));
+            current.setRoot(new TopNNode(node.getId(), current.getRoot(), node.getCount(), node.getOrderBy(), node.getOrderings(), partial));
 
             if (current.isDistributed()) {
                 current.setRoot(new SinkNode(idAllocator.getNextId(), current.getRoot(), current.getRoot().getOutputSymbols()));
 
                 // create merge plan fragment
                 PlanNode source = new ExchangeNode(idAllocator.getNextId(), current.getId(), current.getRoot().getOutputSymbols());
-                TopNNode merge = new TopNNode(idAllocator.getNextId(), source, node.getCount(), node.getOrderBy(), node.getOrderings(), false, node.getSampleWeight());
+                TopNNode merge = new TopNNode(idAllocator.getNextId(), source, node.getCount(), node.getOrderBy(), node.getOrderings(), false);
                 current = createSingleNodePlan(merge)
                         .addChild(current.build());
             }
@@ -345,14 +336,14 @@ public class DistributedLogicalPlanner
         {
             SubPlanBuilder current = node.getSource().accept(this, context);
 
-            current.setRoot(new LimitNode(node.getId(), current.getRoot(), node.getCount(), node.getSampleWeight()));
+            current.setRoot(new LimitNode(node.getId(), current.getRoot(), node.getCount()));
 
             if (current.isDistributed()) {
                 current.setRoot(new SinkNode(idAllocator.getNextId(), current.getRoot(), current.getRoot().getOutputSymbols()));
 
                 // create merge plan fragment
                 PlanNode source = new ExchangeNode(idAllocator.getNextId(), current.getId(), current.getRoot().getOutputSymbols());
-                LimitNode merge = new LimitNode(idAllocator.getNextId(), source, node.getCount(), node.getSampleWeight());
+                LimitNode merge = new LimitNode(idAllocator.getNextId(), source, node.getCount());
                 current = createSingleNodePlan(merge)
                         .addChild(current.build());
             }

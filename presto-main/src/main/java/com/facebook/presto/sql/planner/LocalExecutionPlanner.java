@@ -35,7 +35,6 @@ import com.facebook.presto.operator.LimitOperator.LimitOperatorFactory;
 import com.facebook.presto.operator.LookupJoinOperators;
 import com.facebook.presto.operator.LookupSourceSupplier;
 import com.facebook.presto.operator.MarkDistinctOperator.MarkDistinctOperatorFactory;
-import com.facebook.presto.operator.MaterializeSampleOperator;
 import com.facebook.presto.operator.OperatorFactory;
 import com.facebook.presto.operator.OrderByOperator.OrderByOperatorFactory;
 import com.facebook.presto.operator.OutputFactory;
@@ -76,7 +75,6 @@ import com.facebook.presto.sql.planner.plan.IndexSourceNode;
 import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.LimitNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
-import com.facebook.presto.sql.planner.plan.MaterializeSampleNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.PlanVisitor;
@@ -92,6 +90,7 @@ import com.facebook.presto.sql.planner.plan.TopNNode;
 import com.facebook.presto.sql.planner.plan.UnionNode;
 import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
+import com.facebook.presto.sql.relational.SqlToRowExpressionTranslator;
 import com.facebook.presto.sql.tree.BooleanLiteral;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.ExpressionTreeRewriter;
@@ -444,15 +443,12 @@ public class LocalExecutionPlanner
                 sortOrders.add(node.getOrderings().get(symbol));
             }
 
-            Optional<Integer> sampleWeightChannel = node.getSampleWeight().transform(source.channelGetter());
-
             OperatorFactory operator = new TopNOperatorFactory(
                     context.getNextOperatorId(),
                     source.getTypes(),
                     (int) node.getCount(),
                     sortChannels,
                     sortOrders,
-                    sampleWeightChannel,
                     node.isPartial());
 
             return new PhysicalOperation(operator, source.getLayout(), source);
@@ -493,9 +489,7 @@ public class LocalExecutionPlanner
         {
             PhysicalOperation source = node.getSource().accept(this, context);
 
-            Optional<Integer> sampleWeightChannel = node.getSampleWeight().transform(source.channelGetter());
-
-            OperatorFactory operatorFactory = new LimitOperatorFactory(context.getNextOperatorId(), source.getTypes(), node.getCount(), sampleWeightChannel);
+            OperatorFactory operatorFactory = new LimitOperatorFactory(context.getNextOperatorId(), source.getTypes(), node.getCount());
             return new PhysicalOperation(operatorFactory, source.getLayout(), source);
         }
 
@@ -534,35 +528,8 @@ public class LocalExecutionPlanner
                     .putAll(source.getLayout())
                     .put(node.getMarkerSymbol(), source.getLayout().size()).build();
 
-            Optional<Integer> sampleWeightChannel = node.getSampleWeightSymbol().transform(source.channelGetter());
-
-            MarkDistinctOperatorFactory operator = new MarkDistinctOperatorFactory(context.getNextOperatorId(), source.getTypes(), channels, sampleWeightChannel);
+            MarkDistinctOperatorFactory operator = new MarkDistinctOperatorFactory(context.getNextOperatorId(), source.getTypes(), channels);
             return new PhysicalOperation(operator, outputMappings, source);
-        }
-
-        @Override
-        public PhysicalOperation visitMaterializeSample(MaterializeSampleNode node, LocalExecutionPlanContext context)
-        {
-            PhysicalOperation source = node.getSource().accept(this, context);
-
-            int sampleWeightChannel = Iterables.getOnlyElement(getChannelsForSymbols(ImmutableList.of(node.getSampleWeightSymbol()), source.getLayout()));
-
-            ImmutableMap.Builder<Symbol, Integer> outputMappings = ImmutableMap.builder();
-            for (Map.Entry<Symbol, Integer> entry : source.getLayout().entrySet()) {
-                int value = entry.getValue();
-                if (value == sampleWeightChannel) {
-                    continue;
-                }
-                // Because we've removed the sample weight channel, all channels after it have been renumbered
-                outputMappings.put(entry.getKey(), value > sampleWeightChannel ? value - 1 : value);
-            }
-
-            List<Type> types = new ArrayList<>();
-            types.addAll(source.getTypes());
-            types.remove(sampleWeightChannel);
-
-            MaterializeSampleOperator.MaterializeSampleOperatorFactory operator = new MaterializeSampleOperator.MaterializeSampleOperatorFactory(context.getNextOperatorId(), types, sampleWeightChannel);
-            return new PhysicalOperation(operator, outputMappings.build(), source);
         }
 
         @Override
@@ -695,20 +662,16 @@ public class LocalExecutionPlanner
                             sourceNode.getId(),
                             dataStreamProvider,
                             columns,
-                            rewrittenFilter,
-                            rewrittenProjections,
-                            expressionTypes,
-                            session.getTimeZoneKey());
+                            SqlToRowExpressionTranslator.translate(rewrittenFilter, expressionTypes, metadata, session, true),
+                            SqlToRowExpressionTranslator.translate(rewrittenProjections, expressionTypes, metadata, session, true));
 
                     return new PhysicalOperation(operatorFactory, outputMappings);
                 }
                 else {
                     OperatorFactory operatorFactory = compiler.compileFilterAndProjectOperator(
                             context.getNextOperatorId(),
-                            rewrittenFilter,
-                            rewrittenProjections,
-                            expressionTypes,
-                            session.getTimeZoneKey());
+                            SqlToRowExpressionTranslator.translate(rewrittenFilter, expressionTypes, metadata, session, true),
+                            SqlToRowExpressionTranslator.translate(rewrittenProjections, expressionTypes, metadata, session, true));
                     return new PhysicalOperation(operatorFactory, outputMappings, source);
                 }
             }
