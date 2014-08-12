@@ -13,15 +13,17 @@
  */
 package com.facebook.presto.type;
 
+import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.StandardErrorCode;
+import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
-import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.spi.type.AbstractType;
 import org.joni.Regex;
 
 public class LikePatternType
-        implements Type
+        extends AbstractType
 {
     public static final LikePatternType LIKE_PATTERN = new LikePatternType();
 
@@ -30,16 +32,21 @@ public class LikePatternType
         return LIKE_PATTERN;
     }
 
-    @Override
-    public String getName()
+    public LikePatternType()
     {
-        return "LikePattern";
+        super("LikePattern", Regex.class);
     }
 
     @Override
-    public Class<?> getJavaType()
+    public Object getObjectValue(ConnectorSession session, Block block, int position)
     {
-        return Regex.class;
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void appendTo(Block block, int position, BlockBuilder blockBuilder)
+    {
+        throw new UnsupportedOperationException();
     }
 
     @Override

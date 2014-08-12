@@ -19,6 +19,7 @@ import com.facebook.presto.operator.PageBuilder;
 import com.facebook.presto.operator.PagesHashStrategy;
 import com.facebook.presto.operator.SimplePagesHashStrategy;
 import com.facebook.presto.spi.block.Block;
+import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.gen.JoinCompiler.PagesHashStrategyFactory;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
@@ -43,7 +44,7 @@ public class TestJoinCompiler
     {
         // compile a single channel hash strategy
         JoinCompiler joinCompiler = new JoinCompiler();
-        PagesHashStrategyFactory pagesHashStrategyFactory = joinCompiler.compilePagesHashStrategy(1, Ints.asList(0));
+        PagesHashStrategyFactory pagesHashStrategyFactory = joinCompiler.compilePagesHashStrategy(ImmutableList.<Type>of(VARCHAR), Ints.asList(0));
 
         // crate hash strategy with a single channel blocks -- make sure there is some overlap in values
         List<Block> channel = ImmutableList.of(
@@ -63,7 +64,7 @@ public class TestJoinCompiler
 
             for (int leftBlockPosition = 0; leftBlockPosition < leftBlock.getPositionCount(); leftBlockPosition++) {
                 // hash code of position must match block hash
-                assertEquals(hashStrategy.hashPosition(leftBlockIndex, leftBlockPosition), leftBlock.hash(leftBlockPosition));
+                assertEquals(hashStrategy.hashPosition(leftBlockIndex, leftBlockPosition), VARCHAR.hash(leftBlock, leftBlockPosition));
 
                 // position must be equal to itself
                 assertTrue(hashStrategy.positionEqualsPosition(leftBlockIndex, leftBlockPosition, leftBlockIndex, leftBlockPosition));
@@ -74,7 +75,7 @@ public class TestJoinCompiler
                     for (int rightBlockPosition = 0; rightBlockPosition < rightBlock.getPositionCount(); rightBlockPosition++) {
                         assertEquals(
                                 hashStrategy.positionEqualsPosition(leftBlockIndex, leftBlockPosition, rightBlockIndex, rightBlockPosition),
-                                leftBlock.equalTo(leftBlockPosition, rightBlock, rightBlockPosition));
+                                VARCHAR.equalTo(leftBlock, leftBlockPosition, rightBlock, rightBlockPosition));
                     }
                 }
 
@@ -83,7 +84,7 @@ public class TestJoinCompiler
                     for (int position = 0; position < rightBlock.getPositionCount(); position++) {
                         assertEquals(
                                 hashStrategy.positionEqualsRow(leftBlockIndex, leftBlockPosition, position, rightBlock),
-                                leftBlock.equalTo(leftBlockPosition, rightBlock, position));
+                                VARCHAR.equalTo(leftBlock, leftBlockPosition, rightBlock, position));
                     }
                 }
 
@@ -92,7 +93,7 @@ public class TestJoinCompiler
             }
 
             // verify output block matches
-            assertBlockEquals(pageBuilder.build().getBlock(0), leftBlock);
+            assertBlockEquals(VARCHAR, pageBuilder.build().getBlock(0), leftBlock);
         }
     }
 
@@ -102,7 +103,8 @@ public class TestJoinCompiler
     {
         // compile a single channel hash strategy
         JoinCompiler joinCompiler = new JoinCompiler();
-        PagesHashStrategyFactory pagesHashStrategyFactory = joinCompiler.compilePagesHashStrategy(5, Ints.asList(1, 2, 3, 4));
+        List<Type> types = ImmutableList.<Type>of(VARCHAR, VARCHAR, BIGINT, DOUBLE, BOOLEAN);
+        PagesHashStrategyFactory pagesHashStrategyFactory = joinCompiler.compilePagesHashStrategy(types, Ints.asList(1, 2, 3, 4));
 
         // crate hash strategy with a single channel blocks -- make sure there is some overlap in values
         List<Block> extraChannel = ImmutableList.of(
@@ -131,11 +133,11 @@ public class TestJoinCompiler
         // verify channel count
         assertEquals(hashStrategy.getChannelCount(), 5);
 
-        PagesHashStrategy expectedHashStrategy = new SimplePagesHashStrategy(channels, Ints.asList(1, 2, 3, 4));
+        PagesHashStrategy expectedHashStrategy = new SimplePagesHashStrategy(types, channels, Ints.asList(1, 2, 3, 4));
 
         // verify hashStrategy is consistent with equals and hash code from block
         for (int leftBlockIndex = 0; leftBlockIndex < varcharChannel.size(); leftBlockIndex++) {
-            PageBuilder pageBuilder = new PageBuilder(ImmutableList.of(VARCHAR, VARCHAR, BIGINT, DOUBLE, BOOLEAN));
+            PageBuilder pageBuilder = new PageBuilder(types);
 
             int leftPositionCount = varcharChannel.get(leftBlockIndex).getPositionCount();
             for (int leftBlockPosition = 0; leftBlockPosition < leftPositionCount; leftBlockPosition++) {
@@ -179,7 +181,7 @@ public class TestJoinCompiler
 
             // verify output block matches
             Page page = pageBuilder.build();
-            assertPageEquals(page, new Page(
+            assertPageEquals(types, page, new Page(
                     extraChannel.get(leftBlockIndex),
                     varcharChannel.get(leftBlockIndex),
                     longChannel.get(leftBlockIndex),

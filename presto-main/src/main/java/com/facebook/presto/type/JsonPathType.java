@@ -14,14 +14,16 @@
 package com.facebook.presto.type;
 
 import com.facebook.presto.operator.scalar.JsonPath;
+import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.StandardErrorCode;
+import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
-import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.spi.type.AbstractType;
 
 public class JsonPathType
-        implements Type
+        extends AbstractType
 {
     public static final JsonPathType JSON_PATH = new JsonPathType();
 
@@ -30,16 +32,21 @@ public class JsonPathType
         return JSON_PATH;
     }
 
-    @Override
-    public String getName()
+    public JsonPathType()
     {
-        return "JsonPath";
+        super("JsonPath", JsonPath.class);
     }
 
     @Override
-    public Class<?> getJavaType()
+    public Object getObjectValue(ConnectorSession session, Block block, int position)
     {
-        return JsonPath.class;
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void appendTo(Block block, int position, BlockBuilder blockBuilder)
+    {
+        throw new UnsupportedOperationException();
     }
 
     @Override

@@ -75,6 +75,7 @@ tokens {
     USE_SCHEMA;
     CREATE_TABLE;
     DROP_TABLE;
+    RENAME_TABLE;
     CREATE_VIEW;
     DROP_VIEW;
     OR_REPLACE;
@@ -166,7 +167,9 @@ statement
     | showFunctionsStmt
     | useCollectionStmt
     | createTableStmt
+    | insertStmt
     | dropTableStmt
+    | alterTableStmt
     | createViewStmt
     | dropViewStmt
     ;
@@ -630,8 +633,16 @@ dropTableStmt
     : DROP TABLE qname -> ^(DROP_TABLE qname)
     ;
 
+insertStmt
+    : INSERT INTO qname query -> ^(INSERT qname query)
+    ;
+
 createTableStmt
     : CREATE TABLE qname s=tableContentsSource -> ^(CREATE_TABLE qname $s)
+    ;
+
+alterTableStmt
+    : ALTER TABLE s=qname RENAME TO t=qname -> ^(RENAME_TABLE $s $t)
     ;
 
 createViewStmt
@@ -819,6 +830,8 @@ CREATE: 'CREATE';
 TABLE: 'TABLE';
 VIEW: 'VIEW';
 REPLACE: 'REPLACE';
+INSERT: 'INSERT';
+INTO: 'INTO';
 CHAR: 'CHAR';
 CHARACTER: 'CHARACTER';
 VARYING: 'VARYING';
@@ -865,6 +878,8 @@ POISSONIZED: 'POISSONIZED';
 TABLESAMPLE: 'TABLESAMPLE';
 RESCALED: 'RESCALED';
 STRATIFY: 'STRATIFY';
+ALTER: 'ALTER';
+RENAME: 'RENAME';
 
 EQ  : '=';
 NEQ : '<>' | '!=';

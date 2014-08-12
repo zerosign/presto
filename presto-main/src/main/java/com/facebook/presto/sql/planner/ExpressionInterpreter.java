@@ -142,6 +142,8 @@ public class ExpressionInterpreter
         @Override
         public Object visitInputReference(InputReference node, Object context)
         {
+            Type type = expressionTypes.get(node);
+
             int channel = node.getChannel();
             if (context instanceof PagePositionContext) {
                 PagePositionContext pagePositionContext = (PagePositionContext) context;
@@ -152,18 +154,18 @@ public class ExpressionInterpreter
                     return null;
                 }
 
-                Class<?> javaType = block.getType().getJavaType();
+                Class<?> javaType = type.getJavaType();
                 if (javaType == boolean.class) {
-                    return block.getBoolean(position);
+                    return type.getBoolean(block, position);
                 }
                 else if (javaType == long.class) {
-                    return block.getLong(position);
+                    return type.getLong(block, position);
                 }
                 else if (javaType == double.class) {
-                    return block.getDouble(position);
+                    return type.getDouble(block, position);
                 }
                 else if (javaType == Slice.class) {
-                    return block.getSlice(position);
+                    return type.getSlice(block, position);
                 }
                 else {
                     throw new UnsupportedOperationException("not yet implemented");
@@ -175,7 +177,7 @@ public class ExpressionInterpreter
                     return null;
                 }
 
-                Class<?> javaType = cursor.getType(node.getChannel()).getJavaType();
+                Class<?> javaType = type.getJavaType();
                 if (javaType == boolean.class) {
                     return cursor.getBoolean(channel);
                 }

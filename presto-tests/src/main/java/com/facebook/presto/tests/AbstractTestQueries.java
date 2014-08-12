@@ -69,11 +69,7 @@ public abstract class AbstractTestQueries
         extends AbstractTestQueryFramework
 {
     protected static final List<FunctionInfo> CUSTOM_FUNCTIONS = new FunctionRegistry.FunctionListBuilder()
-            .aggregate("custom_sum",
-                    BIGINT,
-                    ImmutableList.of(BIGINT),
-                    BIGINT,
-                    new CustomSum())
+            .aggregate(CustomSum.class)
             .window("custom_rank", BIGINT, ImmutableList.<Type>of(), CustomRank.class)
             .scalar(CustomAdd.class)
             .scalar(CreateHll.class)
@@ -515,6 +511,9 @@ public abstract class AbstractTestQueries
             throws Exception
     {
         assertQuery("SELECT COUNT(*) FROM ORDERS");
+        assertQuery("SELECT COUNT(42) FROM ORDERS", "SELECT COUNT(*) FROM ORDERS");
+        assertQuery("SELECT COUNT(42 + 42) FROM ORDERS", "SELECT COUNT(*) FROM ORDERS");
+        assertQuery("SELECT COUNT(null) FROM ORDERS", "SELECT 0");
     }
 
     @Test
@@ -1567,6 +1566,13 @@ public abstract class AbstractTestQueries
 
         // argument in group by
         assertQuery("SELECT EXTRACT(YEAR FROM now()), count(*) FROM orders GROUP BY now()");
+    }
+
+    @Test
+    public void testMaxBy()
+            throws Exception
+    {
+        assertQuery("SELECT MAX_BY(orderkey, totalprice) FROM orders", "SELECT orderkey FROM orders ORDER BY totalprice DESC LIMIT 1");
     }
 
     @Test

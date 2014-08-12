@@ -13,16 +13,18 @@
  */
 package com.facebook.presto.type;
 
+import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.StandardErrorCode;
+import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
-import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.spi.type.AbstractType;
 
 import java.util.regex.Pattern;
 
 public class RegexpType
-    implements Type
+        extends AbstractType
 {
     public static final RegexpType REGEXP = new RegexpType();
 
@@ -31,16 +33,21 @@ public class RegexpType
         return REGEXP;
     }
 
-    @Override
-    public String getName()
+    public RegexpType()
     {
-        return "RegExp";
+        super("RegExp", Pattern.class);
     }
 
     @Override
-    public Class<?> getJavaType()
+    public Object getObjectValue(ConnectorSession session, Block block, int position)
     {
-        return Pattern.class;
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void appendTo(Block block, int position, BlockBuilder blockBuilder)
+    {
+        throw new UnsupportedOperationException();
     }
 
     @Override

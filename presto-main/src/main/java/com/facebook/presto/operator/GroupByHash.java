@@ -114,7 +114,7 @@ public class GroupByHash
             int groupId = putIfAbsent(position, blocks);
 
             // output the group id for this row
-            blockBuilder.appendLong(groupId);
+            BIGINT.writeLong(blockBuilder, groupId);
         }
 
         Block block = blockBuilder.build();
@@ -123,7 +123,7 @@ public class GroupByHash
 
     public int putIfAbsent(int position, Block... blocks)
     {
-        int hashPosition = ((int) Murmur3.hash64(hashRow(position, blocks, channels))) & mask;
+        int hashPosition = ((int) Murmur3.hash64(hashRow(position, blocks))) & mask;
 
         // look for an empty slot or a slot containing this key
         int groupId = -1;
@@ -214,11 +214,13 @@ public class GroupByHash
         groupAddress.ensureCapacity(maxFill);
     }
 
-    private static int hashRow(int position, Block[] blocks, int[] channels)
+    private int hashRow(int position, Block[] blocks)
     {
         int result = 0;
-        for (int channel : channels) {
-            result = result * 31 + blocks[channel].hash(position);
+        for (int i = 0; i < channels.length; i++) {
+            Type type = types.get(i);
+            Block block = blocks[channels[i]];
+            result = result * 31 + type.hash(block, position);
         }
         return result;
     }
@@ -237,12 +239,14 @@ public class GroupByHash
 
     private static class PageBuilder
     {
+        private final List<Type> types;
         private final List<BlockBuilder> blockBuilders;
         private int positionCount;
         private boolean full;
 
         public PageBuilder(List<Type> types)
         {
+            this.types = types;
             ImmutableList.Builder<BlockBuilder> builder = ImmutableList.builder();
             for (Type type : types) {
                 builder.add(type.createBlockBuilder(new BlockBuilderStatus()));
@@ -268,7 +272,8 @@ public class GroupByHash
         {
             // append to each channel
             for (int i = 0; i < channels.length; i++) {
-                blocks[channels[i]].appendTo(position, blockBuilders.get(i));
+                Type type = types.get(i);
+                type.appendTo(blocks[channels[i]], position, blockBuilders.get(i));
                 full = full || blockBuilders.get(i).isFull();
             }
             positionCount++;
@@ -277,16 +282,19 @@ public class GroupByHash
         public void appendValuesTo(int position, BlockBuilder... builders)
         {
             for (int i = 0; i < blockBuilders.size(); i++) {
+                Type type = types.get(i);
                 BlockBuilder channel = blockBuilders.get(i);
-                channel.appendTo(position, builders[i]);
+                type.appendTo(channel, position, builders[i]);
             }
         }
 
         public int hashCode(int position)
         {
             int result = 0;
-            for (BlockBuilder channel : blockBuilders) {
-                result = 31 * result + channel.hash(position);
+            for (int i = 0; i < blockBuilders.size(); i++) {
+                Type type = types.get(i);
+                BlockBuilder channel = blockBuilders.get(i);
+                result = 31 * result + type.hash(channel, position);
             }
             return result;
         }
@@ -294,9 +302,10 @@ public class GroupByHash
         public boolean equals(int thisPosition, int thatPosition, Block[] thatBlocks, int[] channels)
         {
             for (int i = 0; i < channels.length; i++) {
+                Type type = types.get(i);
                 Block thisBlock = blockBuilders.get(i);
                 Block thatBlock = thatBlocks[channels[i]];
-                if (!thisBlock.equalTo(thisPosition, thatBlock, thatPosition)) {
+                if (!type.equalTo(thisBlock, thisPosition, thatBlock, thatPosition)) {
                     return false;
                 }
             }
