@@ -192,14 +192,14 @@ orderOrLimitQuerySpec
 
 queryExprBody
     : ( queryTerm -> queryTerm )
-      ( UNION setQuant? queryTerm       -> ^(UNION $queryExprBody queryTerm setQuant?)
-      | EXCEPT setQuant? queryTerm      -> ^(EXCEPT $queryExprBody queryTerm setQuant?)
+      ( UNION s=setQuant? queryTerm       -> ^(UNION $queryExprBody queryTerm $s?)
+      | EXCEPT s=setQuant? queryTerm      -> ^(EXCEPT $queryExprBody queryTerm $s?)
       )*
     ;
 
 queryTerm
     : ( queryPrimary -> queryPrimary )
-      ( INTERSECT setQuant? queryPrimary -> ^(INTERSECT $queryTerm queryPrimary setQuant?) )*
+      ( INTERSECT s=setQuant? queryPrimary -> ^(INTERSECT $queryTerm queryPrimary $s?) )*
     ;
 
 queryPrimary

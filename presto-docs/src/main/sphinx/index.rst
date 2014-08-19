@@ -12,6 +12,5 @@ Presto Documentation
     language
     sql
     migration
-    release
     spi
-    rest
+    release
