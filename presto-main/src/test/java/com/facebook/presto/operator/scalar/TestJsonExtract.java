@@ -52,19 +52,10 @@ public class TestJsonExtract
         assertEquals(tokenizePath("$.x.foo"), ImmutableList.of("x", "foo"));
         assertEquals(tokenizePath("$.x[\"foo\"]"), ImmutableList.of("x", "foo"));
         assertEquals(tokenizePath("$.x[42]"), ImmutableList.of("x", "42"));
-
-        assertEquals(tokenizePath("  $  "), ImmutableList.of());
-        assertEquals(tokenizePath("  $  .  foo  "), ImmutableList.of("foo"));
-        assertEquals(tokenizePath("  $  [  \"foo\"  ]  "), ImmutableList.of("foo"));
-        assertEquals(tokenizePath("  $  [  \"foo.bar\"  ]  "), ImmutableList.of("foo.bar"));
-        assertEquals(tokenizePath("  $  [  42  ]  "), ImmutableList.of("42"));
-        assertEquals(tokenizePath("  $  .  42  "), ImmutableList.of("42"));
-        assertEquals(tokenizePath("  $  .  42  .  42  "), ImmutableList.of("42", "42"));
-        assertEquals(tokenizePath("  $  .  x  .  foo  "), ImmutableList.of("x", "foo"));
-        assertEquals(tokenizePath("  $  .  x  [  \"foo\"  ]  "), ImmutableList.of("x", "foo"));
-        assertEquals(tokenizePath("  $  .  x  [  42  ]  "), ImmutableList.of("x", "42"));
-
-        assertEquals(tokenizePath("\t$\r.\nfoo\u3000"), ImmutableList.of("foo"));
+        assertEquals(tokenizePath("$.foo_42._bar63"), ImmutableList.of("foo_42", "_bar63"));
+        assertEquals(tokenizePath("$[foo_42][_bar63]"), ImmutableList.of("foo_42", "_bar63"));
+        assertEquals(tokenizePath("$.foo:42.:bar63"), ImmutableList.of("foo:42", ":bar63"));
+        assertEquals(tokenizePath("$[\"foo:42\"][\":bar63\"]"), ImmutableList.of("foo:42", ":bar63"));
 
         assertPathToken("foo");
 
@@ -79,6 +70,21 @@ public class TestJsonExtract
         assertQuotedPathToken("[");
         assertQuotedPathToken("'");
         assertQuotedPathToken("!@#$%^&*(){}[]<>?/\\|.,`~\r\n\t \0");
+
+        // colon in subscript must be quoted
+        assertInvalidPath("$[foo:bar]");
+
+        // whitespace is not allowed
+        assertInvalidPath(" $.x");
+        assertInvalidPath(" $.x ");
+        assertInvalidPath("$. x");
+        assertInvalidPath("$ .x");
+        assertInvalidPath("$\n.x");
+        assertInvalidPath("$.x [42]");
+        assertInvalidPath("$.x[ 42]");
+        assertInvalidPath("$.x[42 ]");
+        assertInvalidPath("$.x[ \"foo\"]");
+        assertInvalidPath("$.x[\"foo\" ]");
     }
 
     private static void assertPathToken(String fieldName)
@@ -92,20 +98,26 @@ public class TestJsonExtract
     private static void assertQuotedPathToken(String fieldName)
     {
         assertPathTokenQuoting(fieldName);
-        try {
-            // without quoting we should get an error
-            tokenizePath("$." + fieldName);
-            fail("Expected PrestoException");
-        }
-        catch (PrestoException e) {
-            assertEquals(e.getErrorCode(), INVALID_FUNCTION_ARGUMENT.toErrorCode());
-        }
+        // without quoting we should get an error
+        assertInvalidPath("$." + fieldName);
     }
+
     private static void assertPathTokenQuoting(String fieldName)
     {
         assertTrue(fieldName.indexOf('"') < 0);
         assertEquals(tokenizePath("$[\"" + fieldName + "\"]"), ImmutableList.of(fieldName));
         assertEquals(tokenizePath("$.foo[\"" + fieldName + "\"].bar"), ImmutableList.of("foo", fieldName, "bar"));
+    }
+
+    public static void assertInvalidPath(String path)
+    {
+        try {
+            tokenizePath(path);
+            fail("Expected PrestoException");
+        }
+        catch (PrestoException e) {
+            assertEquals(e.getErrorCode(), INVALID_FUNCTION_ARGUMENT.toErrorCode());
+        }
     }
 
     @Test
@@ -278,7 +290,6 @@ public class TestJsonExtract
         // Test extraction using  mix of bracket and dot notation json path with special json characters in path
         assertEquals(doJsonExtract("{\"@$fuu\": {\"bar\": 1}}", "$[\"@$fuu\"].bar"), "1");
         assertEquals(doJsonExtract("{\",fuu\": {\"bar\": [\"\\u0001\"]}}", "$[\",fuu\"].bar[0]"), "\"\\u0001\""); // Test escaped characters
-
 
         // Test numeric path expression matches arrays and objects
         assertEquals(doJsonExtract("[0, 1, 2]", "$.1"), "1");

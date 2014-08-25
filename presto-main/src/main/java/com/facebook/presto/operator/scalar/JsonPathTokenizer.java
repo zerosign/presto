@@ -19,7 +19,6 @@ import com.google.common.collect.AbstractIterator;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static java.lang.Character.isLetterOrDigit;
-import static java.lang.Character.isWhitespace;
 import static java.lang.String.format;
 
 public class JsonPathTokenizer
@@ -45,17 +44,16 @@ public class JsonPathTokenizer
     @Override
     protected String computeNext()
     {
-        skipWhitespace();
         if (!hasNextCharacter()) {
             return endOfData();
         }
 
         if (tryMatch(DOT)) {
-            return matchUnquotedToken();
+            return matchPathSegment();
         }
 
         if (tryMatch(OPEN_BRACKET)) {
-            String token = tryMatch(QUOTE) ? matchQuotedToken() : matchUnquotedToken();
+            String token = tryMatch(QUOTE) ? matchQuotedSubscript() : matchUnquotedSubscript();
 
             match(CLOSE_BRACKET);
             return token;
@@ -64,13 +62,11 @@ public class JsonPathTokenizer
         throw invalidJsonPath();
     }
 
-    private String matchUnquotedToken()
+    private String matchPathSegment()
     {
-        skipWhitespace();
-
         // seek until we see a special character or whitespace
         int start = index;
-        while (hasNextCharacter() && isLetterOrDigit(peekCharacter())) {
+        while (hasNextCharacter() && isUnquotedPathCharacter(peekCharacter())) {
             nextCharacter();
         }
         int end = index;
@@ -85,7 +81,36 @@ public class JsonPathTokenizer
         return token;
     }
 
-    private String matchQuotedToken()
+    private static boolean isUnquotedPathCharacter(char c)
+    {
+        return c == ':' || isUnquotedSubscriptCharacter(c);
+    }
+
+    private String matchUnquotedSubscript()
+    {
+        // seek until we see a special character or whitespace
+        int start = index;
+        while (hasNextCharacter() && isUnquotedSubscriptCharacter(peekCharacter())) {
+            nextCharacter();
+        }
+        int end = index;
+
+        String token = path.substring(start, end);
+
+        // an empty unquoted token is not allowed
+        if (token.isEmpty()) {
+            throw invalidJsonPath();
+        }
+
+        return token;
+    }
+
+    private static boolean isUnquotedSubscriptCharacter(char c)
+    {
+        return c == '_' || isLetterOrDigit(c);
+    }
+
+    private String matchQuotedSubscript()
     {
         // quote has already been matched
 
@@ -116,20 +141,11 @@ public class JsonPathTokenizer
 
     private boolean tryMatch(char expected)
     {
-        skipWhitespace();
-
         if (peekCharacter() != expected) {
             return false;
         }
         index++;
         return true;
-    }
-
-    private void skipWhitespace()
-    {
-        while (hasNextCharacter() && isWhitespace(peekCharacter())) {
-            index++;
-        }
     }
 
     private void nextCharacter()

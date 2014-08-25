@@ -21,11 +21,11 @@ import com.facebook.presto.byteCode.CompilerContext;
 import com.facebook.presto.byteCode.DumpByteCodeVisitor;
 import com.facebook.presto.byteCode.DynamicClassLoader;
 import com.facebook.presto.byteCode.FieldDefinition;
-import com.facebook.presto.byteCode.LocalVariableDefinition;
 import com.facebook.presto.byteCode.MethodDefinition;
 import com.facebook.presto.byteCode.NamedParameterDefinition;
 import com.facebook.presto.byteCode.ParameterizedType;
 import com.facebook.presto.byteCode.SmartClassWriter;
+import com.facebook.presto.byteCode.Variable;
 import com.facebook.presto.byteCode.control.ForLoop;
 import com.facebook.presto.byteCode.control.ForLoop.ForLoopBuilder;
 import com.facebook.presto.byteCode.control.IfStatement;
@@ -73,9 +73,7 @@ import javax.inject.Inject;
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintWriter;
-import java.lang.invoke.MethodHandle;
 import java.lang.reflect.Constructor;
-import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -98,6 +96,8 @@ import static com.facebook.presto.byteCode.ParameterizedType.type;
 import static com.facebook.presto.byteCode.ParameterizedType.typeFromPathName;
 import static com.facebook.presto.byteCode.control.ForLoop.forLoopBuilder;
 import static com.facebook.presto.sql.gen.Bootstrap.BOOTSTRAP_METHOD;
+import static com.facebook.presto.sql.gen.Bootstrap.CALL_SITES_FIELD_NAME;
+import static com.facebook.presto.sql.gen.ByteCodeUtils.setCallSitesField;
 import static com.google.common.base.Objects.toStringHelper;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
@@ -212,7 +212,7 @@ public class ExpressionCompiler
 
         // declare fields
         FieldDefinition sessionField = classDefinition.declareField(a(PRIVATE, FINAL), "session", ConnectorSession.class);
-        classDefinition.declareField(a(PRIVATE, VOLATILE, STATIC), "callSites", Map.class);
+        classDefinition.declareField(a(PRIVATE, VOLATILE, STATIC), CALL_SITES_FIELD_NAME, Map.class);
 
         // constructor
         classDefinition.declareConstructor(new CompilerContext(BOOTSTRAP_METHOD),
@@ -326,7 +326,7 @@ public class ExpressionCompiler
 
         // declare fields
         FieldDefinition sessionField = classDefinition.declareField(a(PRIVATE, FINAL), "session", ConnectorSession.class);
-        classDefinition.declareField(a(PRIVATE, VOLATILE, STATIC), "callSites", Map.class);
+        classDefinition.declareField(a(PRIVATE, VOLATILE, STATIC), CALL_SITES_FIELD_NAME, Map.class);
 
         // constructor
         classDefinition.declareConstructor(new CompilerContext(BOOTSTRAP_METHOD),
@@ -416,9 +416,9 @@ public class ExpressionCompiler
 
         CompilerContext compilerContext = filterAndProjectMethod.getCompilerContext();
 
-        LocalVariableDefinition positionVariable = compilerContext.declareVariable(int.class, "position");
+        Variable positionVariable = compilerContext.declareVariable(int.class, "position");
 
-        LocalVariableDefinition rowsVariable = compilerContext.declareVariable(int.class, "rows");
+        Variable rowsVariable = compilerContext.declareVariable(int.class, "rows");
         filterAndProjectMethod.getBody()
                 .comment("int rows = page.getPositionCount();")
                 .getVariable("page")
@@ -427,7 +427,7 @@ public class ExpressionCompiler
 
         List<Integer> allInputChannels = getInputChannels(Iterables.concat(projections, ImmutableList.of(filter)));
         for (int channel : allInputChannels) {
-            LocalVariableDefinition blockVariable = compilerContext.declareVariable(com.facebook.presto.spi.block.Block.class, "block_" + channel);
+            Variable blockVariable = compilerContext.declareVariable(com.facebook.presto.spi.block.Block.class, "block_" + channel);
             filterAndProjectMethod.getBody()
                     .comment("Block %s = page.getBlock(%s);", blockVariable.getName(), channel)
                     .getVariable("page")
@@ -523,7 +523,7 @@ public class ExpressionCompiler
 
         CompilerContext compilerContext = filterAndProjectMethod.getCompilerContext();
 
-        LocalVariableDefinition completedPositionsVariable = compilerContext.declareVariable(int.class, "completedPositions");
+        Variable completedPositionsVariable = compilerContext.declareVariable(int.class, "completedPositions");
         filterAndProjectMethod.getBody()
                 .comment("int completedPositions = 0;")
                 .putVariable(completedPositionsVariable, 0);
@@ -844,18 +844,6 @@ public class ExpressionCompiler
         Map<String, Class<?>> classes = classLoader.defineClasses(byteCodes);
         generatedClasses.addAndGet(classes.size());
         return classes;
-    }
-
-    private static void setCallSitesField(Class<?> clazz, Map<Long, MethodHandle> callSites)
-    {
-        try {
-            Field field = clazz.getDeclaredField("callSites");
-            field.setAccessible(true);
-            field.set(null, callSites);
-        }
-        catch (IllegalAccessException | NoSuchFieldException e) {
-            throw Throwables.propagate(e);
-        }
     }
 
     private static final class OperatorCacheKey
