@@ -16,6 +16,7 @@ package com.facebook.presto.sql.planner.optimizations;
 import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.type.BigintType;
+import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.planner.DependencyExtractor;
 import com.facebook.presto.sql.planner.PlanNodeIdAllocator;
@@ -46,14 +47,13 @@ import com.google.common.collect.Sets;
 import java.util.Map;
 import java.util.Set;
 
-import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.collect.Iterables.getOnlyElement;
 
 public class WindowFilterPushDown
         extends PlanOptimizer
 {
-    private static final Signature ROW_NUMBER_SIGNATURE = new Signature("row_number", BigintType.BIGINT, ImmutableList.<Type>of());
+    private static final Signature ROW_NUMBER_SIGNATURE = new Signature("row_number", StandardTypes.BIGINT, ImmutableList.<String>of());
 
     @Override
     public PlanNode optimize(PlanNode plan, ConnectorSession session, Map<Symbol, Type> types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator)
@@ -231,10 +231,9 @@ public class WindowFilterPushDown
         {
             Visitor visitor = new Visitor();
             Long limit = visitor.process(expression, rowNumberSymbol);
-            if (limit == null) {
+            if (limit == null || limit >= Integer.MAX_VALUE) {
                 return Optional.absent();
             }
-            checkArgument(limit < Integer.MAX_VALUE, "filter on row_number greater than allowed value");
 
             return Optional.of(limit.intValue());
         }

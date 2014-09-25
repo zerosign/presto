@@ -440,7 +440,7 @@ public class ExpressionAnalyzer
             }
 
             try {
-                metadata.getExactOperator(OperatorType.CAST, type, ImmutableList.of(VARCHAR));
+                metadata.getFunctionRegistry().getCoercion(VARCHAR, type);
             }
             catch (IllegalArgumentException e) {
                 throw new SemanticException(TYPE_MISMATCH, node, "No literal form for type %s", type);
@@ -512,22 +512,24 @@ public class ExpressionAnalyzer
                 }
             }
 
-            ImmutableList.Builder<Type> argumentTypes = ImmutableList.builder();
+            ImmutableList.Builder<String> argumentTypes = ImmutableList.builder();
             for (Expression expression : node.getArguments()) {
-                argumentTypes.add(process(expression, context));
+                argumentTypes.add(process(expression, context).getName());
             }
 
             FunctionInfo function = metadata.resolveFunction(node.getName(), argumentTypes.build(), context.isApproximate());
             for (int i = 0; i < node.getArguments().size(); i++) {
                 Expression expression = node.getArguments().get(i);
-                Type type = function.getArgumentTypes().get(i);
+                Type type = metadata.getType(function.getArgumentTypes().get(i));
+                checkNotNull(type, "Type %s not found", function.getArgumentTypes().get(i));
                 coerceType(context, expression, type, String.format("Function %s argument %d", function.getSignature(), i));
             }
             resolvedFunctions.put(node, function);
 
-            expressionTypes.put(node, function.getReturnType());
+            Type type = metadata.getType(function.getReturnType());
+            expressionTypes.put(node, type);
 
-            return function.getReturnType();
+            return type;
         }
 
         @Override
@@ -574,7 +576,7 @@ public class ExpressionAnalyzer
             Type value = process(node.getExpression(), context);
             if (value != UNKNOWN) {
                 try {
-                    metadata.getExactOperator(OperatorType.CAST, type, ImmutableList.of(value));
+                    metadata.getFunctionRegistry().getCoercion(value, type);
                 }
                 catch (OperatorNotFoundException e) {
                     throw new SemanticException(TYPE_MISMATCH, node, "Cannot cast %s to %s", value, type);
@@ -669,13 +671,14 @@ public class ExpressionAnalyzer
 
             for (int i = 0; i < arguments.length; i++) {
                 Expression expression = arguments[i];
-                Type type = operatorInfo.getArgumentTypes().get(i);
+                Type type = metadata.getType(operatorInfo.getArgumentTypes().get(i));
                 coerceType(context, expression, type, String.format("Operator %s argument %d", operatorInfo, i));
             }
 
-            expressionTypes.put(node, operatorInfo.getReturnType());
+            Type type = metadata.getType(operatorInfo.getReturnType());
+            expressionTypes.put(node, type);
 
-            return operatorInfo.getReturnType();
+            return type;
         }
 
         private void coerceType(AnalysisContext context, Expression expression, Type expectedType, String message)
