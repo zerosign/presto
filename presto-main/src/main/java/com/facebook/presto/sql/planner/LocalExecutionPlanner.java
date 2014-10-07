@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.sql.planner;
 
+import com.facebook.presto.Session;
 import com.facebook.presto.block.BlockUtils;
 import com.facebook.presto.execution.TaskManagerConfig;
 import com.facebook.presto.index.IndexManager;
@@ -41,7 +42,6 @@ import com.facebook.presto.operator.MarkDistinctOperator.MarkDistinctOperatorFac
 import com.facebook.presto.operator.OperatorFactory;
 import com.facebook.presto.operator.OrderByOperator.OrderByOperatorFactory;
 import com.facebook.presto.operator.OutputFactory;
-import com.facebook.presto.operator.PageBuilder;
 import com.facebook.presto.operator.PageProcessor;
 import com.facebook.presto.operator.ProjectionFunction;
 import com.facebook.presto.operator.ProjectionFunctions;
@@ -60,17 +60,18 @@ import com.facebook.presto.operator.WindowFunctionDefinition;
 import com.facebook.presto.operator.WindowOperator.WindowOperatorFactory;
 import com.facebook.presto.operator.aggregation.AccumulatorFactory;
 import com.facebook.presto.operator.index.FieldSetFilteringRecordSet;
+import com.facebook.presto.operator.index.IndexBuildDriverFactoryProvider;
 import com.facebook.presto.operator.index.IndexJoinLookupStats;
 import com.facebook.presto.operator.index.IndexLookupSourceSupplier;
 import com.facebook.presto.operator.index.IndexSourceOperator;
-import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.Index;
+import com.facebook.presto.spi.PageBuilder;
 import com.facebook.presto.spi.RecordSet;
 import com.facebook.presto.spi.RecordSink;
 import com.facebook.presto.spi.block.SortOrder;
 import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.split.DataStreamProvider;
 import com.facebook.presto.split.MappedRecordSet;
+import com.facebook.presto.split.PageSourceProvider;
 import com.facebook.presto.sql.gen.ExpressionCompiler;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.optimizations.IndexJoinOptimizer;
@@ -144,7 +145,6 @@ import static com.facebook.presto.operator.DistinctLimitOperator.DistinctLimitOp
 import static com.facebook.presto.operator.TableCommitOperator.TableCommitOperatorFactory;
 import static com.facebook.presto.operator.TableCommitOperator.TableCommitter;
 import static com.facebook.presto.operator.TableWriterOperator.TableWriterOperatorFactory;
-import static com.facebook.presto.operator.index.PagesIndexBuilderOperator.PagesIndexBuilderOperatorFactory;
 import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.getExpressionTypes;
 import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.getExpressionTypesFromInput;
 import static com.facebook.presto.sql.planner.plan.IndexJoinNode.EquiJoinClause.indexGetter;
@@ -168,7 +168,7 @@ public class LocalExecutionPlanner
     private final Metadata metadata;
     private final SqlParser sqlParser;
 
-    private final DataStreamProvider dataStreamProvider;
+    private final PageSourceProvider pageSourceProvider;
     private final IndexManager indexManager;
     private final RecordSinkManager recordSinkManager;
     private final Supplier<ExchangeClient> exchangeClientSupplier;
@@ -181,7 +181,7 @@ public class LocalExecutionPlanner
     public LocalExecutionPlanner(
             Metadata metadata,
             SqlParser sqlParser,
-            DataStreamProvider dataStreamProvider,
+            PageSourceProvider pageSourceProvider,
             IndexManager indexManager,
             RecordSinkManager recordSinkManager,
             Supplier<ExchangeClient> exchangeClientSupplier,
@@ -191,7 +191,7 @@ public class LocalExecutionPlanner
             TaskManagerConfig taskManagerConfig)
     {
         checkNotNull(compilerConfig, "compilerConfig is null");
-        this.dataStreamProvider = dataStreamProvider;
+        this.pageSourceProvider = checkNotNull(pageSourceProvider, "pageSourceProvider is null");
         this.indexManager = checkNotNull(indexManager, "indexManager is null");
         this.exchangeClientSupplier = exchangeClientSupplier;
         this.metadata = checkNotNull(metadata, "metadata is null");
@@ -204,7 +204,7 @@ public class LocalExecutionPlanner
         interpreterEnabled = compilerConfig.isInterpreterEnabled();
     }
 
-    public LocalExecutionPlan plan(ConnectorSession session,
+    public LocalExecutionPlan plan(Session session,
             PlanNode plan,
             Map<Symbol, Type> types,
             OutputFactory outputOperatorFactory)
@@ -226,7 +226,7 @@ public class LocalExecutionPlanner
 
     private static class LocalExecutionPlanContext
     {
-        private final ConnectorSession session;
+        private final Session session;
         private final Map<Symbol, Type> types;
         private final List<DriverFactory> driverFactories;
         private final Optional<IndexSourceContext> indexSourceContext;
@@ -234,12 +234,12 @@ public class LocalExecutionPlanner
         private int nextOperatorId;
         private boolean inputDriver = true;
 
-        public LocalExecutionPlanContext(ConnectorSession session, Map<Symbol, Type> types)
+        public LocalExecutionPlanContext(Session session, Map<Symbol, Type> types)
         {
             this(session, types, new ArrayList<DriverFactory>(), Optional.<IndexSourceContext>absent());
         }
 
-        private LocalExecutionPlanContext(ConnectorSession session, Map<Symbol, Type> types, List<DriverFactory> driverFactories, Optional<IndexSourceContext> indexSourceContext)
+        private LocalExecutionPlanContext(Session session, Map<Symbol, Type> types, List<DriverFactory> driverFactories, Optional<IndexSourceContext> indexSourceContext)
         {
             this.session = session;
             this.types = types;
@@ -257,7 +257,7 @@ public class LocalExecutionPlanner
             return ImmutableList.copyOf(driverFactories);
         }
 
-        public ConnectorSession getSession()
+        public Session getSession()
         {
             return session;
         }
@@ -332,9 +332,9 @@ public class LocalExecutionPlanner
     private class Visitor
             extends PlanVisitor<LocalExecutionPlanContext, PhysicalOperation>
     {
-        private final ConnectorSession session;
+        private final Session session;
 
-        private Visitor(ConnectorSession session)
+        private Visitor(Session session)
         {
             this.session = session;
         }
@@ -786,7 +786,7 @@ public class LocalExecutionPlanner
                     SourceOperatorFactory operatorFactory = new ScanFilterAndProjectOperator.ScanFilterAndProjectOperatorFactory(
                             context.getNextOperatorId(),
                             sourceNode.getId(),
-                            dataStreamProvider,
+                            pageSourceProvider,
                             cursorProcessor,
                             pageProcessor,
                             columns,
@@ -847,7 +847,7 @@ public class LocalExecutionPlanner
                 OperatorFactory operatorFactory = new ScanFilterAndProjectOperator.ScanFilterAndProjectOperatorFactory(
                         context.getNextOperatorId(),
                         sourceNode.getId(),
-                        dataStreamProvider,
+                        pageSourceProvider,
                         new GenericCursorProcessor(filterFunction, projectionFunctions),
                         new GenericPageProcessor(filterFunction, projectionFunctions),
                         columns,
@@ -889,7 +889,7 @@ public class LocalExecutionPlanner
             }
 
             List<Type> types = getSourceOperatorTypes(node, context.getTypes());
-            OperatorFactory operatorFactory = new TableScanOperatorFactory(context.getNextOperatorId(), node.getId(), dataStreamProvider, types, columns);
+            OperatorFactory operatorFactory = new TableScanOperatorFactory(context.getNextOperatorId(), node.getId(), pageSourceProvider, types, columns);
             return new PhysicalOperation(operatorFactory, outputMappings.build());
         }
 
@@ -1042,24 +1042,15 @@ public class LocalExecutionPlanner
             PhysicalOperation indexSource = node.getIndexSource().accept(this, indexContext);
             List<Integer> indexChannels = getChannelsForSymbols(indexSymbols, indexSource.getLayout());
 
-            PagesIndexBuilderOperatorFactory pagesIndexOutput = new PagesIndexBuilderOperatorFactory(
+            IndexBuildDriverFactoryProvider indexBuildDriverFactoryProvider = new IndexBuildDriverFactoryProvider(
                     indexContext.getNextOperatorId(),
-                    indexSource.getTypes()
-            );
-
-            DriverFactory indexBuildDriverFactory = new DriverFactory(
                     indexContext.isInputDriver(),
-                    false,
-                    ImmutableList.<OperatorFactory>builder()
-                            .addAll(indexSource.getOperatorFactories())
-                            .add(pagesIndexOutput)
-                            .build());
+                    indexSource.getOperatorFactories());
 
             IndexLookupSourceSupplier indexLookupSourceSupplier = new IndexLookupSourceSupplier(
                     indexChannels,
                     indexSource.getTypes(),
-                    indexBuildDriverFactory,
-                    pagesIndexOutput,
+                    indexBuildDriverFactoryProvider,
                     maxIndexMemorySize,
                     indexJoinLookupStats);
 

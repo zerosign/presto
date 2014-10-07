@@ -24,11 +24,11 @@ public abstract class ParametricOperator
         implements ParametricFunction
 {
     private final OperatorType operatorType;
-    private final List<Signature.TypeParameter> typeParameters;
+    private final List<TypeParameter> typeParameters;
     private final String returnType;
     private final List<String> argumentTypes;
 
-    protected ParametricOperator(OperatorType operatorType, List<Signature.TypeParameter> typeParameters, String returnType, List<String> argumentTypes)
+    protected ParametricOperator(OperatorType operatorType, List<TypeParameter> typeParameters, String returnType, List<String> argumentTypes)
     {
         this.typeParameters = ImmutableList.copyOf(checkNotNull(typeParameters, "typeParameters is null"));
         this.returnType = checkNotNull(returnType, "returnType is null");
@@ -39,7 +39,7 @@ public abstract class ParametricOperator
     @Override
     public Signature getSignature()
     {
-        return new Signature(mangleOperatorName(operatorType), typeParameters, returnType, argumentTypes, true);
+        return new Signature(mangleOperatorName(operatorType), typeParameters, returnType, argumentTypes, false, true);
     }
 
     @Override

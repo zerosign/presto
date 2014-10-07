@@ -13,7 +13,7 @@
  */
 package com.facebook.presto.tests;
 
-import com.facebook.presto.spi.ConnectorSession;
+import com.facebook.presto.Session;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.MaterializedRow;
@@ -41,12 +41,12 @@ public abstract class AbstractTestDistributedQueries
 {
     protected AbstractTestDistributedQueries(QueryRunner queryRunner)
     {
-        this(queryRunner, null);
+        super(queryRunner);
     }
 
-    protected AbstractTestDistributedQueries(QueryRunner queryRunner, ConnectorSession defaultSampledSession)
+    protected AbstractTestDistributedQueries(QueryRunner queryRunner, Session sampledSession)
     {
-        super(queryRunner, defaultSampledSession);
+        super(queryRunner, sampledSession);
     }
 
     private void assertCreateTable(String table, @Language("SQL") String query, @Language("SQL") String rowCountQuery)

@@ -14,6 +14,7 @@
 package com.facebook.presto.execution;
 
 import com.facebook.presto.OutputBuffers;
+import com.facebook.presto.Session;
 import com.facebook.presto.UnpartitionedPagePartitionFunction;
 import com.facebook.presto.execution.SharedBuffer.BufferState;
 import com.facebook.presto.execution.StateMachine.StateChangeListener;
@@ -25,7 +26,6 @@ import com.facebook.presto.metadata.PrestoNode;
 import com.facebook.presto.metadata.Split;
 import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.operator.TaskContext;
-import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.FixedSplitSource;
 import com.facebook.presto.spi.Node;
@@ -61,7 +61,6 @@ import javax.annotation.concurrent.GuardedBy;
 import java.net.URI;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
@@ -73,7 +72,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static com.facebook.presto.OutputBuffers.INITIAL_EMPTY_OUTPUT_BUFFERS;
-import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
+import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.planner.plan.TableScanNode.GeneratedPartitions;
 import static com.facebook.presto.util.Failures.toFailures;
@@ -88,7 +87,7 @@ import static org.testng.Assert.fail;
 @Test(singleThreaded = true)
 public class TestSqlStageExecution
 {
-    public static final ConnectorSession SESSION = new ConnectorSession("user", "source", "catalog", "schema", UTC_KEY, Locale.ENGLISH, "address", "agent");
+    public static final TaskId OUT = new TaskId("query", "stage", "out");
     private NodeTaskMap nodeTaskMap;
     private InMemoryNodeManager nodeManager;
     private NodeScheduler nodeScheduler;
@@ -185,7 +184,7 @@ public class TestSqlStageExecution
         ExecutorService executor = newCachedThreadPool(daemonThreadsNamed("stageExecutor"));
 
         OutputBuffers outputBuffers = INITIAL_EMPTY_OUTPUT_BUFFERS
-                .withBuffer("out", new UnpartitionedPagePartitionFunction())
+                .withBuffer(OUT, new UnpartitionedPagePartitionFunction())
                 .withNoMoreBufferIds();
 
         StageExecutionPlan tableScanPlan = createTableScanPlan("test", splitCount);
@@ -194,7 +193,7 @@ public class TestSqlStageExecution
                 tableScanPlan,
                 nodeScheduler,
                 remoteTaskFactory,
-                SESSION,
+                TEST_SESSION,
                 splitBatchSize,
                 8,      // initialHashPartitions
                 executor,
@@ -215,7 +214,7 @@ public class TestSqlStageExecution
             nodeManager.addNode("foo", new PrestoNode("other", URI.create("http://127.0.0.1:11"), NodeVersion.UNKNOWN));
 
             OutputBuffers outputBuffers = INITIAL_EMPTY_OUTPUT_BUFFERS
-                    .withBuffer("out", new UnpartitionedPagePartitionFunction())
+                    .withBuffer(OUT, new UnpartitionedPagePartitionFunction())
                     .withNoMoreBufferIds();
 
             stageExecution = new SqlStageExecution(new QueryId("query"),
@@ -223,7 +222,7 @@ public class TestSqlStageExecution
                     joinPlan,
                     new NodeScheduler(nodeManager, new NodeSchedulerConfig(), nodeTaskMap),
                     new MockRemoteTaskFactory(executor),
-                    SESSION,
+                    TEST_SESSION,
                     1000,
                     8,
                     executor,
@@ -357,7 +356,7 @@ public class TestSqlStageExecution
 
         @Override
         public RemoteTask createRemoteTask(
-                ConnectorSession session,
+                Session session,
                 TaskId taskId,
                 Node node,
                 PlanFragment fragment,
@@ -392,8 +391,7 @@ public class TestSqlStageExecution
             {
                 this.taskStateMachine = new TaskStateMachine(checkNotNull(taskId, "taskId is null"), checkNotNull(executor, "executor is null"));
 
-                ConnectorSession session = new ConnectorSession("user", "source", "catalog", "schema", UTC_KEY, Locale.ENGLISH, "address", "agent");
-                this.taskContext = new TaskContext(taskStateMachine, executor, session, new DataSize(256, MEGABYTE), new DataSize(1, MEGABYTE), true);
+                this.taskContext = new TaskContext(taskStateMachine, executor, TEST_SESSION, new DataSize(256, MEGABYTE), new DataSize(1, MEGABYTE), true);
 
                 this.location = URI.create("fake://task/" + taskId);
 

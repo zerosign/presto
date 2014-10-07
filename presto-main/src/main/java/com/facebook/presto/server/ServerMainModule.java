@@ -53,17 +53,19 @@ import com.facebook.presto.operator.RecordSinkManager;
 import com.facebook.presto.operator.RecordSinkProvider;
 import com.facebook.presto.operator.index.IndexJoinLookupStats;
 import com.facebook.presto.spi.ConnectorFactory;
+import com.facebook.presto.spi.ConnectorPageSourceProvider;
 import com.facebook.presto.spi.ConnectorRecordSinkProvider;
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.block.BlockEncodingFactory;
 import com.facebook.presto.spi.block.BlockEncodingSerde;
 import com.facebook.presto.spi.block.FixedWidthBlockEncoding;
+import com.facebook.presto.spi.block.LazySliceArrayBlockEncoding;
+import com.facebook.presto.spi.block.SliceArrayBlockEncoding;
 import com.facebook.presto.spi.block.VariableWidthBlockEncoding;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
-import com.facebook.presto.split.ConnectorDataStreamProvider;
-import com.facebook.presto.split.DataStreamManager;
-import com.facebook.presto.split.DataStreamProvider;
+import com.facebook.presto.split.PageSourceManager;
+import com.facebook.presto.split.PageSourceProvider;
 import com.facebook.presto.sql.Serialization.ExpressionDeserializer;
 import com.facebook.presto.sql.Serialization.ExpressionSerializer;
 import com.facebook.presto.sql.Serialization.FunctionCallDeserializer;
@@ -163,12 +165,13 @@ public class ServerMainModule
         // execution
         binder.bind(LocationFactory.class).to(HttpLocationFactory.class).in(Scopes.SINGLETON);
         binder.bind(RemoteTaskFactory.class).to(HttpRemoteTaskFactory.class).in(Scopes.SINGLETON);
+        newExporter(binder).export(RemoteTaskFactory.class).withGeneratedName();
         httpClientBinder(binder).bindHttpClient("scheduler", ForScheduler.class).withTracing();
 
         // data stream provider
-        binder.bind(DataStreamManager.class).in(Scopes.SINGLETON);
-        binder.bind(DataStreamProvider.class).to(DataStreamManager.class).in(Scopes.SINGLETON);
-        newSetBinder(binder, ConnectorDataStreamProvider.class);
+        binder.bind(PageSourceManager.class).in(Scopes.SINGLETON);
+        binder.bind(PageSourceProvider.class).to(PageSourceManager.class).in(Scopes.SINGLETON);
+        newSetBinder(binder, ConnectorPageSourceProvider.class);
 
         // record sink provider
         binder.bind(RecordSinkManager.class).in(Scopes.SINGLETON);
@@ -262,6 +265,8 @@ public class ServerMainModule
         blockEncodingFactoryBinder.addBinding().toInstance(RunLengthBlockEncoding.FACTORY);
         blockEncodingFactoryBinder.addBinding().toInstance(DictionaryBlockEncoding.FACTORY);
         blockEncodingFactoryBinder.addBinding().toInstance(SnappyBlockEncoding.FACTORY);
+        blockEncodingFactoryBinder.addBinding().toInstance(SliceArrayBlockEncoding.FACTORY);
+        blockEncodingFactoryBinder.addBinding().toInstance(LazySliceArrayBlockEncoding.FACTORY);
 
         // thread visualizer
         jaxrsBinder(binder).bind(ThreadResource.class);

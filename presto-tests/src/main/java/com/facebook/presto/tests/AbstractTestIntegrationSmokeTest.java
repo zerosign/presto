@@ -13,7 +13,7 @@
  */
 package com.facebook.presto.tests;
 
-import com.facebook.presto.spi.ConnectorSession;
+import com.facebook.presto.Session;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.QueryRunner;
 import com.google.common.base.Optional;
@@ -29,19 +29,19 @@ import static org.testng.Assert.assertTrue;
 public abstract class AbstractTestIntegrationSmokeTest
         extends AbstractTestQueryFramework
 {
-    private final Optional<ConnectorSession> sampledSession;
+    private final Optional<Session> sampledSession;
 
     protected AbstractTestIntegrationSmokeTest(QueryRunner queryRunner)
     {
-        this(queryRunner, Optional.<ConnectorSession>absent());
+        this(queryRunner, Optional.<Session>absent());
     }
 
-    protected AbstractTestIntegrationSmokeTest(QueryRunner queryRunner, ConnectorSession sampledSession)
+    protected AbstractTestIntegrationSmokeTest(QueryRunner queryRunner, Session sampledSession)
     {
         this(queryRunner, Optional.of(checkNotNull(sampledSession, "sampledSession is null")));
     }
 
-    private AbstractTestIntegrationSmokeTest(QueryRunner queryRunner, Optional<ConnectorSession> sampledSession)
+    private AbstractTestIntegrationSmokeTest(QueryRunner queryRunner, Optional<Session> sampledSession)
     {
         super(queryRunner);
         this.sampledSession = checkNotNull(sampledSession, "sampledSession is null");
@@ -123,6 +123,10 @@ public abstract class AbstractTestIntegrationSmokeTest
     public void testTableSampleSystem()
             throws Exception
     {
+        if (!sampledSession.isPresent()) {
+             return;
+        }
+
         int total = computeActual("SELECT orderkey FROM orders").getMaterializedRows().size();
 
         boolean sampleSizeFound = false;
@@ -141,11 +145,15 @@ public abstract class AbstractTestIntegrationSmokeTest
             throws Exception
     {
         MaterializedResult actualSchemas = computeActual("SHOW SCHEMAS").toJdbcTypes();
-        MaterializedResult expectedSchemas = MaterializedResult.resultBuilder(queryRunner.getDefaultSession(), VARCHAR)
-                .row("tpch")
-                .row("tpch_sampled")
-                .build();
-        assertTrue(actualSchemas.getMaterializedRows().containsAll(expectedSchemas.getMaterializedRows()));
+
+        MaterializedResult.Builder resultBuilder = MaterializedResult.resultBuilder(queryRunner.getDefaultSession(), VARCHAR)
+                .row("tpch");
+
+        if (sampledSession.isPresent()) {
+            resultBuilder.row("tpch_sampled");
+        }
+
+        assertTrue(actualSchemas.getMaterializedRows().containsAll(resultBuilder.build().getMaterializedRows()));
     }
 
     @Test

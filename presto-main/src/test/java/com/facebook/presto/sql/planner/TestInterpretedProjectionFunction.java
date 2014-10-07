@@ -17,7 +17,6 @@ import com.facebook.presto.block.BlockAssertions;
 import com.facebook.presto.block.BlockUtils;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.MetadataManager;
-import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
@@ -29,14 +28,13 @@ import org.testng.annotations.Test;
 
 import javax.annotation.Nullable;
 
-import java.util.Locale;
 import java.util.Map;
 
+import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
 import static com.facebook.presto.operator.scalar.FunctionAssertions.createExpression;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static org.testng.Assert.assertEquals;
 
@@ -178,7 +176,7 @@ public class TestInterpretedProjectionFunction
                 symbolToInputMappings,
                 METADATA,
                 SQL_PARSER,
-                new ConnectorSession("user", "test", "catalog", "schema", UTC_KEY, Locale.ENGLISH, null, null)
+                TEST_SESSION
         );
 
         // create output

@@ -13,11 +13,11 @@
  */
 package com.facebook.presto.kafka;
 
+import com.facebook.presto.Session;
 import com.facebook.presto.kafka.util.EmbeddedKafka;
 import com.facebook.presto.kafka.util.TestUtils;
 import com.facebook.presto.metadata.QualifiedTableName;
 import com.facebook.presto.metadata.TableHandle;
-import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.type.BigintType;
 import com.facebook.presto.testing.MaterializedResult;
@@ -31,20 +31,27 @@ import org.testng.annotations.BeforeClass;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
-import java.util.Locale;
 import java.util.Properties;
 import java.util.UUID;
 
 import static com.facebook.presto.kafka.util.EmbeddedKafka.CloseableProducer;
 import static com.facebook.presto.kafka.util.TestUtils.createEmptyTopicDescription;
 import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
+import static java.util.Locale.ENGLISH;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertTrue;
 
 @Test(singleThreaded = true)
 public class TestMinimalFunctionality
 {
-    private static final ConnectorSession SESSION = new ConnectorSession("user", "source", "kafka", "default", UTC_KEY, Locale.ENGLISH, null, null);
+    private static final Session SESSION = Session.builder()
+            .setUser("user")
+            .setSource("source")
+            .setCatalog("kafka")
+            .setSchema("default")
+            .setTimeZoneKey(UTC_KEY)
+            .setLocale(ENGLISH)
+            .build();
 
     private EmbeddedKafka embeddedKafka;
     private String topicName;

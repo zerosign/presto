@@ -13,10 +13,10 @@
  */
 package com.facebook.presto.sql.planner;
 
+import com.facebook.presto.Session;
 import com.facebook.presto.metadata.FunctionInfo;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.Signature;
-import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.sql.planner.PlanFragment.OutputPartitioning;
 import com.facebook.presto.sql.planner.PlanFragment.PlanDistribution;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
@@ -64,6 +64,8 @@ import static com.facebook.presto.sql.planner.plan.AggregationNode.Step.FINAL;
 import static com.facebook.presto.sql.planner.plan.AggregationNode.Step.PARTIAL;
 import static com.facebook.presto.sql.planner.plan.AggregationNode.Step.SINGLE;
 import static com.facebook.presto.sql.planner.plan.IndexJoinNode.EquiJoinClause.probeGetter;
+import static com.facebook.presto.sql.planner.plan.JoinNode.EquiJoinClause.leftGetter;
+import static com.facebook.presto.sql.planner.plan.JoinNode.EquiJoinClause.rightGetter;
 import static com.facebook.presto.sql.planner.plan.TableWriterNode.CreateHandle;
 import static com.facebook.presto.sql.planner.plan.TableWriterNode.CreateName;
 import static com.facebook.presto.sql.planner.plan.TableWriterNode.InsertHandle;
@@ -77,20 +79,20 @@ import static com.google.common.base.Preconditions.checkState;
  */
 public class DistributedLogicalPlanner
 {
-    private final ConnectorSession session;
+    private final Session session;
     private final Metadata metadata;
     private final PlanNodeIdAllocator idAllocator;
 
-    public DistributedLogicalPlanner(ConnectorSession session, Metadata metadata, PlanNodeIdAllocator idAllocator)
+    public DistributedLogicalPlanner(Session session, Metadata metadata, PlanNodeIdAllocator idAllocator)
     {
         this.session = checkNotNull(session, "session is null");
         this.metadata = checkNotNull(metadata, "metadata is null");
         this.idAllocator = checkNotNull(idAllocator, "idAllocator is null");
     }
 
-    public SubPlan createSubPlans(Plan plan, boolean createSingleNodePlan, boolean distributedIndexJoins)
+    public SubPlan createSubPlans(Plan plan, boolean createSingleNodePlan, boolean distributedIndexJoins, boolean distributedJoins)
     {
-        Visitor visitor = new Visitor(plan.getSymbolAllocator(), createSingleNodePlan, distributedIndexJoins);
+        Visitor visitor = new Visitor(plan.getSymbolAllocator(), createSingleNodePlan, distributedIndexJoins, distributedJoins);
         SubPlanBuilder builder = plan.getRoot().accept(visitor, null);
 
         SubPlan subplan = builder.build();
@@ -102,17 +104,19 @@ public class DistributedLogicalPlanner
     private class Visitor
             extends PlanVisitor<Void, SubPlanBuilder>
     {
-        private int nextFragmentId = 0;
+        private int nextFragmentId;
 
         private final SymbolAllocator allocator;
         private final boolean createSingleNodePlan;
         private final boolean distributedIndexJoins;
+        private final boolean distributedJoins;
 
-        public Visitor(SymbolAllocator allocator, boolean createSingleNodePlan, boolean distributedIndexJoins)
+        public Visitor(SymbolAllocator allocator, boolean createSingleNodePlan, boolean distributedIndexJoins, boolean distributedJoins)
         {
             this.allocator = allocator;
             this.createSingleNodePlan = createSingleNodePlan;
             this.distributedIndexJoins = distributedIndexJoins;
+            this.distributedJoins = distributedJoins;
         }
 
         @Override
@@ -481,6 +485,12 @@ public class DistributedLogicalPlanner
             SubPlanBuilder right = node.getRight().accept(this, context);
 
             if (left.isDistributed() || right.isDistributed()) {
+                if (distributedJoins) {
+                    List<Symbol> leftSymbols = Lists.transform(node.getCriteria(), leftGetter());
+                    List<Symbol> rightSymbols = Lists.transform(node.getCriteria(), rightGetter());
+                    left = hashDistributeSubplan(left, leftSymbols);
+                    right = hashDistributeSubplan(right, rightSymbols);
+                }
                 switch (node.getType()) {
                     case INNER:
                     case LEFT:
@@ -512,6 +522,18 @@ public class DistributedLogicalPlanner
                 return createSingleNodePlan(join)
                         .setChildren(Iterables.concat(left.getChildren(), right.getChildren()));
             }
+        }
+
+        public SubPlanBuilder hashDistributeSubplan(SubPlanBuilder subPlan, List<Symbol> symbols)
+        {
+            PlanNode sink = new SinkNode(idAllocator.getNextId(), subPlan.getRoot(), subPlan.getRoot().getOutputSymbols());
+            subPlan.setRoot(sink)
+                    .setHashOutputPartitioning(symbols);
+
+            PlanNode exchange = new ExchangeNode(idAllocator.getNextId(), subPlan.getId(), sink.getOutputSymbols());
+            subPlan = createFixedDistributionPlan(exchange)
+                    .addChild(subPlan.build());
+            return subPlan;
         }
 
         @Override
@@ -617,11 +639,6 @@ public class DistributedLogicalPlanner
         public SubPlanBuilder createCoordinatorOnlyPlan(PlanNode root)
         {
             return new SubPlanBuilder(new PlanFragmentId(nextSubPlanId()), allocator, PlanDistribution.COORDINATOR_ONLY, root, null);
-        }
-
-        private SubPlanBuilder createSubPlan(PlanNode root, PlanDistribution distribution, PlanNodeId partitionedSourceId)
-        {
-            return new SubPlanBuilder(new PlanFragmentId(nextSubPlanId()), allocator, distribution, root, partitionedSourceId);
         }
 
         private String nextSubPlanId()

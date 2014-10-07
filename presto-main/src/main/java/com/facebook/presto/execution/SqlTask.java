@@ -14,11 +14,11 @@
 package com.facebook.presto.execution;
 
 import com.facebook.presto.OutputBuffers;
+import com.facebook.presto.Session;
 import com.facebook.presto.TaskSource;
 import com.facebook.presto.execution.StateMachine.StateChangeListener;
 import com.facebook.presto.operator.TaskContext;
 import com.facebook.presto.operator.TaskStats;
-import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.sql.planner.PlanFragment;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.util.SetThreadName;
@@ -198,7 +198,7 @@ public class SqlTask
         });
     }
 
-    public TaskInfo updateTask(ConnectorSession session, PlanFragment fragment, List<TaskSource> sources, OutputBuffers outputBuffers)
+    public TaskInfo updateTask(Session session, PlanFragment fragment, List<TaskSource> sources, OutputBuffers outputBuffers)
     {
         // assure the task execution is only created once
         SqlTaskExecution taskExecution;
@@ -224,7 +224,7 @@ public class SqlTask
         return getTaskInfo();
     }
 
-    public ListenableFuture<BufferResult> getTaskResults(String outputName, long startingSequenceId, DataSize maxSize)
+    public ListenableFuture<BufferResult> getTaskResults(TaskId outputName, long startingSequenceId, DataSize maxSize)
     {
         checkNotNull(outputName, "outputName is null");
         checkArgument(maxSize.toBytes() > 0, "maxSize must be at least 1 byte");
@@ -234,7 +234,7 @@ public class SqlTask
         return sharedBuffer.get(outputName, startingSequenceId, maxSize);
     }
 
-    public TaskInfo abortTaskResults(String outputId)
+    public TaskInfo abortTaskResults(TaskId outputId)
     {
         checkNotNull(outputId, "outputId is null");
 

@@ -23,7 +23,6 @@ import com.facebook.presto.operator.aggregation.ApproximateSumAggregations;
 import com.facebook.presto.operator.aggregation.AverageAggregations;
 import com.facebook.presto.operator.aggregation.BooleanMaxAggregation;
 import com.facebook.presto.operator.aggregation.BooleanMinAggregation;
-import com.facebook.presto.operator.aggregation.CountColumnAggregations;
 import com.facebook.presto.operator.aggregation.CountIfAggregation;
 import com.facebook.presto.operator.aggregation.DoubleMaxAggregation;
 import com.facebook.presto.operator.aggregation.DoubleMinAggregation;
@@ -31,11 +30,11 @@ import com.facebook.presto.operator.aggregation.DoubleSumAggregation;
 import com.facebook.presto.operator.aggregation.LongMaxAggregation;
 import com.facebook.presto.operator.aggregation.LongMinAggregation;
 import com.facebook.presto.operator.aggregation.LongSumAggregation;
-import com.facebook.presto.operator.aggregation.MaxByAggregations;
 import com.facebook.presto.operator.aggregation.MergeHyperLogLogAggregation;
 import com.facebook.presto.operator.aggregation.VarBinaryMaxAggregation;
 import com.facebook.presto.operator.aggregation.VarBinaryMinAggregation;
 import com.facebook.presto.operator.aggregation.VarianceAggregation;
+import com.facebook.presto.operator.scalar.ArrayFunctions;
 import com.facebook.presto.operator.scalar.ColorFunctions;
 import com.facebook.presto.operator.scalar.DateTimeFunctions;
 import com.facebook.presto.operator.scalar.HyperLogLogFunctions;
@@ -122,7 +121,13 @@ import static com.facebook.presto.metadata.ParametricFunctionUtils.isAggregation
 import static com.facebook.presto.metadata.ParametricFunctionUtils.isHiddenPredicate;
 import static com.facebook.presto.operator.aggregation.ApproximateCountAggregation.APPROXIMATE_COUNT_AGGREGATION;
 import static com.facebook.presto.operator.aggregation.CountAggregation.COUNT;
-import static com.facebook.presto.operator.scalar.IdentityCastParametricFunction.IDENTITY_CAST;
+import static com.facebook.presto.operator.aggregation.CountColumn.COUNT_COLUMN;
+import static com.facebook.presto.operator.aggregation.MaxBy.MAX_BY;
+import static com.facebook.presto.operator.scalar.ArrayCardinalityFunction.ARRAY_CARDINALITY;
+import static com.facebook.presto.operator.scalar.ArrayConstructor.ARRAY_CONSTRUCTOR;
+import static com.facebook.presto.operator.scalar.ArraySubscriptOperator.ARRAY_SUBSCRIPT;
+import static com.facebook.presto.operator.scalar.IdentityCast.IDENTITY_CAST;
+import static com.facebook.presto.operator.scalar.MapSubscriptOperator.MAP_SUBSCRIPT;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.DateType.DATE;
@@ -206,7 +211,6 @@ public class FunctionRegistry
                 .aggregate(ApproximateLongPercentileAggregations.class)
                 .aggregate(ApproximateDoublePercentileAggregations.class)
                 .aggregate(CountIfAggregation.class)
-                .aggregate(CountColumnAggregations.class)
                 .aggregate(BooleanMinAggregation.class)
                 .aggregate(BooleanMaxAggregation.class)
                 .aggregate(DoubleMinAggregation.class)
@@ -221,7 +225,6 @@ public class FunctionRegistry
                 .aggregate(ApproximateCountDistinctAggregations.class)
                 .aggregate(MergeHyperLogLogAggregation.class)
                 .aggregate(ApproximateSetAggregation.class)
-                .aggregate(MaxByAggregations.getAggregations(typeManager))
                 .scalar(StringFunctions.class)
                 .scalar(VarbinaryFunctions.class)
                 .scalar(RegexpFunctions.class)
@@ -246,7 +249,14 @@ public class FunctionRegistry
                 .scalar(DateTimeOperators.class)
                 .scalar(HyperLogLogOperators.class)
                 .scalar(LikeFunctions.class)
-                .parametricScalar(IDENTITY_CAST);
+                .scalar(ArrayFunctions.class)
+                .function(ARRAY_CONSTRUCTOR)
+                .function(ARRAY_SUBSCRIPT)
+                .function(ARRAY_CARDINALITY)
+                .function(MAP_SUBSCRIPT)
+                .function(IDENTITY_CAST)
+                .function(MAX_BY)
+                .function(COUNT_COLUMN);
 
         if (experimentalSyntaxEnabled) {
             builder.aggregate(ApproximateAverageAggregations.class)
@@ -294,9 +304,10 @@ public class FunctionRegistry
         // search for exact match
         FunctionInfo match = null;
         for (ParametricFunction function : candidates) {
-            if (function.getSignature().match(resolvedTypes, false, typeManager)) {
+            Map<String, Type> boundTypeParameters = function.getSignature().bindTypeParameters(resolvedTypes, false, typeManager);
+            if (boundTypeParameters != null) {
                 checkArgument(match == null, "Ambiguous call to %s with parameters %s", name, parameterTypes);
-                match = function.specialize(resolvedTypes);
+                match = function.specialize(boundTypeParameters, resolvedTypes.size());
             }
         }
 
@@ -306,9 +317,10 @@ public class FunctionRegistry
 
         // search for coerced match
         for (ParametricFunction function : candidates) {
-            if (function.getSignature().match(resolvedTypes, true, typeManager)) {
+            Map<String, Type> boundTypeParameters = function.getSignature().bindTypeParameters(resolvedTypes, true, typeManager);
+            if (boundTypeParameters != null) {
                 // TODO: This should also check for ambiguities
-                return function.specialize(resolvedTypes);
+                return function.specialize(boundTypeParameters, resolvedTypes.size());
             }
         }
 
@@ -362,8 +374,9 @@ public class FunctionRegistry
         for (ParametricFunction operator : candidates) {
             Type returnType = typeManager.getType(signature.getReturnType());
             List<Type> argumentTypes = resolveTypes(signature.getArgumentTypes(), typeManager);
-            if (operator.getSignature().match(returnType, argumentTypes, false, typeManager)) {
-                return operator.specialize(returnType, argumentTypes);
+            Map<String, Type> boundTypeParameters = operator.getSignature().bindTypeParameters(returnType, argumentTypes, false, typeManager);
+            if (boundTypeParameters != null) {
+                return operator.specialize(boundTypeParameters, signature.getArgumentTypes().size());
             }
         }
         return null;
