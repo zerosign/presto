@@ -17,6 +17,8 @@ import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.type.DateType;
 import com.facebook.presto.spi.type.TimestampType;
 import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.spi.type.TypeManager;
+import com.facebook.presto.type.TypeRegistry;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Function;
@@ -61,6 +63,9 @@ import static com.facebook.presto.hive.AbstractTestHiveFileFormats.TestColumn.ob
 import static com.facebook.presto.hive.AbstractTestHiveFileFormats.TestColumn.partitionKeyFilter;
 import static com.facebook.presto.hive.AbstractTestHiveFileFormats.TestColumn.typeGetter;
 import static com.facebook.presto.hive.HiveClient.getType;
+import static com.facebook.presto.hive.HivePartitionKey.HIVE_DEFAULT_DYNAMIC_PARTITION;
+import static com.facebook.presto.hive.HiveUtil.isArrayType;
+import static com.facebook.presto.hive.HiveUtil.isMapType;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
@@ -95,6 +100,7 @@ public abstract class AbstractTestHiveFileFormats
 {
     private static final int NUM_ROWS = 1000;
     private static final double EPSILON = 0.001;
+    private static final TypeManager TYPE_MANAGER = new TypeRegistry();
 
     public static final long DATE = new DateTime(2011, 5, 6, 0, 0, UTC).getMillis();
     public static final String DATE_STRING = DateTimeFormat.forPattern("yyyy-MM-dd").withZone(UTC).print(DATE);
@@ -103,7 +109,6 @@ public abstract class AbstractTestHiveFileFormats
 
     // TODO: support null values and determine if timestamp and binary are allowed as partition keys
     public static final List<TestColumn> TEST_COLUMNS = ImmutableList.<TestColumn>builder()
-//            .add(new TestColumn("p_null_string", javaStringObjectInspector, null, null, true))
             .add(new TestColumn("p_empty_string", javaStringObjectInspector, "", Slices.EMPTY_SLICE, true))
             .add(new TestColumn("p_string", javaStringObjectInspector, "test", Slices.utf8Slice("test"), true))
             .add(new TestColumn("p_tinyint", javaByteObjectInspector, "1", 1L, true))
@@ -114,8 +119,19 @@ public abstract class AbstractTestHiveFileFormats
             .add(new TestColumn("p_double", javaDoubleObjectInspector, "6.2", 6.2, true))
             .add(new TestColumn("p_boolean", javaBooleanObjectInspector, "true", true, true))
             .add(new TestColumn("p_date", javaDateObjectInspector, DATE_STRING, DATE, true))
-//            .add(new TestColumn("p_timestamp", javaTimestampObjectInspector, TIMESTAMP_STRING, TIMESTAMP, true))
+            .add(new TestColumn("p_timestamp", javaTimestampObjectInspector, TIMESTAMP_STRING, TIMESTAMP, true))
 //            .add(new TestColumn("p_binary", javaByteArrayObjectInspector, "test2", Slices.utf8Slice("test2"), true))
+            .add(new TestColumn("p_null_string", javaStringObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_tinyint", javaByteObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_smallint", javaShortObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_int", javaIntObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_bigint", javaLongObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_float", javaFloatObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_double", javaDoubleObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_boolean", javaBooleanObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_date", javaDateObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_timestamp", javaTimestampObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+//            .add(new TestColumn("p_null_binary", javaByteArrayObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
             .add(new TestColumn("t_null_string", javaStringObjectInspector, null, null))
             .add(new TestColumn("t_null_array_int", getStandardListObjectInspector(javaIntObjectInspector), null, null))
             .add(new TestColumn("t_empty_string", javaStringObjectInspector, "", Slices.EMPTY_SLICE))
@@ -150,11 +166,11 @@ public abstract class AbstractTestHiveFileFormats
             .add(new TestColumn("t_map_date",
                     getStandardMapObjectInspector(javaDateObjectInspector, javaDateObjectInspector),
                     ImmutableMap.of(new Date(DATE), new Date(DATE)),
-                    String.format("{\"%s\":\"%s\"}", DATE_STRING, DATE_STRING)))
+                    String.format("{\"%d\":%d}", DATE, DATE)))
             .add(new TestColumn("t_map_timestamp",
                     getStandardMapObjectInspector(javaTimestampObjectInspector, javaTimestampObjectInspector),
                     ImmutableMap.of(new Timestamp(TIMESTAMP), new Timestamp(TIMESTAMP)),
-                    String.format("{\"%s\":\"%s\"}", TIMESTAMP_STRING, TIMESTAMP_STRING)))
+                    String.format("{\"%d\":%d}", TIMESTAMP, TIMESTAMP)))
             .add(new TestColumn("t_array_string", getStandardListObjectInspector(javaStringObjectInspector), ImmutableList.of("test"), "[\"test\"]"))
             .add(new TestColumn("t_array_tinyint", getStandardListObjectInspector(javaByteObjectInspector), ImmutableList.of((byte) 1), "[1]"))
             .add(new TestColumn("t_array_smallint", getStandardListObjectInspector(javaShortObjectInspector), ImmutableList.of((short) 2), "[2]"))
@@ -166,11 +182,11 @@ public abstract class AbstractTestHiveFileFormats
             .add(new TestColumn("t_array_date",
                     getStandardListObjectInspector(javaDateObjectInspector),
                     ImmutableList.of(new Date(DATE)),
-                    String.format("[\"%s\"]", DATE_STRING)))
+                    String.format("[%d]", DATE)))
             .add(new TestColumn("t_array_timestamp",
                     getStandardListObjectInspector(javaTimestampObjectInspector),
                     ImmutableList.of(new Timestamp(TIMESTAMP)),
-                    String.format("[\"%s\"]", TIMESTAMP_STRING)))
+                    String.format("[%d]", TIMESTAMP)))
             .add(new TestColumn("t_complex",
                     getStandardMapObjectInspector(
                             javaStringObjectInspector,
@@ -182,7 +198,7 @@ public abstract class AbstractTestHiveFileFormats
                             )
                     ),
                     ImmutableMap.of("test", ImmutableList.<Object>of(new Integer[] {1})),
-                    "{\"test\":[{\"s_int\":1}]}"
+                    "{\"test\":[\"{\\\"s_int\\\":1}\"]}"
             ))
             .build();
 
@@ -196,7 +212,7 @@ public abstract class AbstractTestHiveFileFormats
 
             ObjectInspector inspector = testColumn.getObjectInspector();
             HiveType hiveType = HiveType.getHiveType(inspector);
-            Type type = getType(inspector);
+            Type type = getType(inspector, TYPE_MANAGER);
 
             String typeName = type.getName();
 
@@ -289,7 +305,7 @@ public abstract class AbstractTestHiveFileFormats
                 TestColumn testColumn = testColumns.get(i);
 
                 Object fieldFromCursor;
-                Type type = getType(testColumn.getObjectInspector());
+                Type type = getType(testColumn.getObjectInspector(), TYPE_MANAGER);
                 if (cursor.isNull(i)) {
                     fieldFromCursor = null;
                 }
@@ -313,6 +329,9 @@ public abstract class AbstractTestHiveFileFormats
                 }
                 else if (TimestampType.TIMESTAMP.equals(type)) {
                     fieldFromCursor = cursor.getLong(i);
+                }
+                else if (isArrayType(type) || isMapType(type)) {
+                    fieldFromCursor = cursor.getSlice(i);
                 }
                 else {
                     throw new RuntimeException("unknown type");

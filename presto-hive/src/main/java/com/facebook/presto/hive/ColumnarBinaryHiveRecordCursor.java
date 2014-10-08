@@ -56,6 +56,8 @@ import static com.facebook.presto.hive.HiveType.HIVE_LONG;
 import static com.facebook.presto.hive.HiveType.HIVE_SHORT;
 import static com.facebook.presto.hive.HiveType.HIVE_TIMESTAMP;
 import static com.facebook.presto.hive.HiveUtil.getTableObjectInspector;
+import static com.facebook.presto.hive.HiveUtil.parseHiveTimestamp;
+import static com.facebook.presto.hive.HiveUtil.isArrayOrMap;
 import static com.facebook.presto.hive.NumberParser.parseDouble;
 import static com.facebook.presto.hive.NumberParser.parseLong;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
@@ -119,6 +121,7 @@ class ColumnarBinaryHiveRecordCursor<K>
             Properties splitSchema,
             List<HivePartitionKey> partitionKeys,
             List<HiveColumnHandle> columns,
+            DateTimeZone hiveStorageTimeZone,
             DateTimeZone sessionTimeZone,
             TypeManager typeManager)
     {
@@ -183,7 +186,10 @@ class ColumnarBinaryHiveRecordCursor<K>
                 byte[] bytes = partitionKey.getValue().getBytes(Charsets.UTF_8);
 
                 Type type = types[columnIndex];
-                if (BOOLEAN.equals(type)) {
+                if (HiveUtil.isHiveNull(bytes)) {
+                    nulls[columnIndex] = true;
+                }
+                else if (BOOLEAN.equals(type)) {
                     if (isTrue(bytes, 0, bytes.length)) {
                         booleans[columnIndex] = true;
                     }
@@ -212,6 +218,9 @@ class ColumnarBinaryHiveRecordCursor<K>
                 }
                 else if (DATE.equals(type)) {
                     longs[columnIndex] = ISODateTimeFormat.date().withZoneUTC().parseMillis(partitionKey.getValue());
+                }
+                else if (TIMESTAMP.equals(type)) {
+                    longs[columnIndex] = parseHiveTimestamp(partitionKey.getValue(), hiveStorageTimeZone);
                 }
                 else {
                     throw new UnsupportedOperationException("Unsupported column type: " + type);
@@ -263,10 +272,6 @@ class ColumnarBinaryHiveRecordCursor<K>
             // reset loaded flags
             // partition keys are already loaded, but everything else is not
             System.arraycopy(isPartitionColumn, 0, loaded, 0, isPartitionColumn.length);
-
-            // reset null flags
-            // todo this shouldn't be needed
-            Arrays.fill(nulls, false);
 
             return true;
         }
@@ -506,9 +511,10 @@ class ColumnarBinaryHiveRecordCursor<K>
     {
         checkState(!closed, "Cursor is closed");
 
-        if (!types[fieldId].equals(VARCHAR) && !types[fieldId].equals(VARBINARY)) {
+        Type type = types[fieldId];
+        if (!type.equals(VARCHAR) && !type.equals(VARBINARY) && !isArrayOrMap(hiveTypes[fieldId])) {
             // we don't use Preconditions.checkArgument because it requires boxing fieldId, which affects inner loop performance
-            throw new IllegalArgumentException(String.format("Expected field to be VARCHAR or VARBINARY, actual %s (field %s)", types[fieldId], fieldId));
+            throw new IllegalArgumentException(String.format("Expected field to be VARCHAR or VARBINARY, actual %s (field %s)", type, fieldId));
         }
 
         if (!loaded[fieldId]) {
@@ -599,7 +605,7 @@ class ColumnarBinaryHiveRecordCursor<K>
         else if (DOUBLE.equals(type)) {
             parseDoubleColumn(column);
         }
-        else if (VARCHAR.equals(type) || VARBINARY.equals(type)) {
+        else if (VARCHAR.equals(type) || VARBINARY.equals(type) || isArrayOrMap(hiveTypes[column])) {
             parseStringColumn(column);
         }
         else if (DATE.equals(type)) {

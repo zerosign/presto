@@ -17,12 +17,14 @@ import com.facebook.presto.Session;
 import com.facebook.presto.hive.metastore.InMemoryHiveMetastore;
 import com.facebook.presto.testing.QueryRunner;
 import com.facebook.presto.tests.DistributedQueryRunner;
+import com.facebook.presto.tests.TestFunctionsPlugin;
 import com.facebook.presto.tpch.TpchPlugin;
 import com.facebook.presto.tpch.testing.SampledTpchPlugin;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.tpch.TpchTable;
 import org.apache.hadoop.hive.metastore.api.Database;
+import org.joda.time.DateTimeZone;
 
 import java.io.File;
 import java.util.Map;
@@ -31,6 +33,7 @@ import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
 import static com.facebook.presto.tests.QueryAssertions.copyTpchTables;
 import static com.facebook.presto.tpch.TpchMetadata.TINY_SCHEMA_NAME;
 import static java.util.Locale.ENGLISH;
+import static org.testng.Assert.assertEquals;
 
 public final class HiveQueryRunner
 {
@@ -40,6 +43,7 @@ public final class HiveQueryRunner
 
     private static final String TPCH_SCHEMA = "tpch";
     private static final String TPCH_SAMPLED_SCHEMA = "tpch_sampled";
+    private static final DateTimeZone TIME_ZONE = DateTimeZone.forID("Asia/Kathmandu");
 
     public static QueryRunner createQueryRunner(TpchTable<?>... tables)
             throws Exception
@@ -50,6 +54,8 @@ public final class HiveQueryRunner
     public static QueryRunner createQueryRunner(Iterable<TpchTable<?>> tables)
             throws Exception
     {
+        assertEquals(DateTimeZone.getDefault(), TIME_ZONE, "Timezone not configured correctly. Add -Duser.timezone=Asia/Katmandu to your JVM arguments");
+
         DistributedQueryRunner queryRunner = new DistributedQueryRunner(createSession(), 4);
 
         try {
@@ -65,10 +71,12 @@ public final class HiveQueryRunner
             metastore.createDatabase(new Database("tpch_sampled", null, new File(baseDir, "tpch_sampled").toURI().toString(), null));
 
             queryRunner.installPlugin(new HivePlugin("hive", metastore));
+            queryRunner.installPlugin(new TestFunctionsPlugin());
             Map<String, String> hiveProperties = ImmutableMap.<String, String>builder()
                     .put("hive.metastore.uri", "thrift://localhost:8080")
                     .put("hive.allow-drop-table", "true")
                     .put("hive.allow-rename-table", "true")
+                    .put("hive.time-zone", TIME_ZONE.getID())
                     .build();
             queryRunner.createCatalog("hive", "hive", hiveProperties);
 

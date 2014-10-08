@@ -51,7 +51,7 @@ public class ColumnarBinaryHiveRecordCursorProvider
             return Optional.absent();
         }
 
-        RecordReader<?, ?> recordReader = HiveUtil.createRecordReader(clientId, configuration, path, start, length, schema, columns);
+        RecordReader<?, ?> recordReader = HiveUtil.createRecordReader(clientId, configuration, path, start, length, schema, columns, typeManager);
 
         return Optional.<HiveRecordCursor>of(new ColumnarBinaryHiveRecordCursor<>(
                 bytesRecordReader(recordReader),
@@ -59,6 +59,7 @@ public class ColumnarBinaryHiveRecordCursorProvider
                 schema,
                 partitionKeys,
                 columns,
+                hiveStorageTimeZone,
                 DateTimeZone.forID(session.getTimeZoneKey().getId()),
                 typeManager));
     }
