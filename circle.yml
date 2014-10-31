@@ -2,11 +2,9 @@ machine:
   java:
     version: oraclejdk8
   environment:
-    MAVEN_OPTS: -Xmx2g -Xms2g
     M2_HOME: $HOME/.m2/apache-maven-3.2.3  # .m2 is cached
     M2:      $HOME/.m2/apache-maven-3.2.3/bin
     PATH:    $HOME/.m2/apache-maven-3.2.3/bin:$PATH
-    _JAVA_OPTIONS: -XX:NewSize=100M -XX:NewRatio=8 -XX:SurvivorRatio=8
 
 dependencies:
   pre:
