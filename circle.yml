@@ -1,0 +1,29 @@
+machine:
+  java:
+    version: oraclejdk8
+  environment:
+    MAVEN_OPTS: -Xmx2g -Xms2g
+    M2_HOME: $HOME/.m2/apache-maven-3.2.3  # .m2 is cached
+    M2:      $HOME/.m2/apache-maven-3.2.3/bin
+    PATH:    $HOME/.m2/apache-maven-3.2.3/bin:$PATH
+    _JAVA_OPTIONS: -XX:NewSize=100M -XX:NewRatio=8 -XX:SurvivorRatio=8
+
+dependencies:
+  pre:
+    # install maven-3.2.3 required by Presto
+    - mkdir -p $(dirname $M2_HOME)
+    - test -d $M2_HOME || curl 'http://apache.cs.utah.edu/maven/maven-3/3.2.3/binaries/apache-maven-3.2.3-bin.tar.gz' | tar zxvf - -C $(dirname $M2_HOME)
+
+
+test:
+  override:
+    - mvn integration-test
+        timeout: 900
+
+deployment:
+  all:
+    branch: master
+    commands:
+      - mvn versions:set -DgenerateBackupPoms=false -DnewVersion=0.79-${CIRCLE_SHA1}
+      - mvn package -DskipTests
+
