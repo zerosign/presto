@@ -16,12 +16,12 @@ dependencies:
 
 test:
   override:
-    - mvn integration-test:
+    - rake test:
         timeout: 3600
 
 deployment:
   all:
-    branch: master
+    branch: /.*/
     commands:
       - rake deploy
 
