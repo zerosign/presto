@@ -6,12 +6,19 @@ EXCLUDE_MODULES = %w|
  presto-hive-hadoop1 presto-hive-hadoop2
  presto-hive-cdh4 presto-hive-cdh5|
 
-
-def active_modules
+def presto_modules
   require "rexml/document"
   pom = REXML::Document.new(File.read("pom.xml"))
   modules = []
   REXML::XPath.each(pom, "/project/modules/module"){|m|
+    modules << m.text
+  }
+  modules
+end
+
+def active_modules
+  modules = []
+  presto_modules.each{|m|
     m_name = m.text
     modules << m_name if EXCLUDE_MODULES.none? {|e| e == m_name }
   }
@@ -70,6 +77,7 @@ EOF
   File.open('pom.xml', 'w'){|f| pom.write(f) }
 
   # Deploy
-  sh "mvn deploy -P td -pl #{active_modules.join(",")} -DskipTests"
+  target_modules = presto_modules.keep_if{|m| m != 'presto-docs'}
+  sh "mvn deploy -P td -pl #{target_modules.join(",")} -DskipTests"
 
 end
