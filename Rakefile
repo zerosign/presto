@@ -70,6 +70,6 @@ EOF
   File.open('pom.xml', 'w'){|f| pom.write(f) }
 
   # Deploy
-  sh "mvn deploy -P td -DskipTests"
+  sh "mvn deploy -P td -pl #{active_modules.join(",")} -DskipTests"
 
 end
