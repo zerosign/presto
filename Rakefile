@@ -25,7 +25,7 @@ end
 
 desc "run tests"
 task "test" do
-  sh "mvn test"
+  sh "mvn #{active_modules.join(",")} test"
 end
 
 desc "deploy presto"
@@ -46,9 +46,9 @@ task "deploy" do
   pom = REXML::Document.new(File.read("pom.xml"))
 
   # delete unncessary modules from pom.xml
-  EXCLUDE_MODULES.each{|m|
-    pom.delete_element("/project/modules/module[text()='#{m}']")
-  }
+  # EXCLUDE_MODULES.each{|m|
+  #    pom.delete_element("/project/modules/module[text()='#{m}']")
+  # }
 
   # Inject extension plugin to deploy artifacts to s3
   extension = <<EOF
