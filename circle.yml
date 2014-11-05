@@ -18,7 +18,9 @@ dependencies:
 
 test:
   override:
-    # do nothing since Presto tests cannot be finished under 4GB memory limit of CircleCI
+    # Do nothing since Presto tests cannot be finished under 4GB memory limit of CircleCI
+    - echo skip tests
+
 
 deployment:
   all:
