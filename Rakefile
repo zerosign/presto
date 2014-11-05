@@ -18,11 +18,14 @@ def active_modules
   modules
 end
 
+desc "compile codes"
+task "compile" do
+  sh "mvn -pl #{active_modules.join(",")} test-compile"
+end
 
 desc "run tests"
 task "test" do
-  test_cmd = "mvn -pl #{active_modules.join(",")} test"
-  sh test_cmd
+  sh "mvn -pl #{active_modules.join(",")} test"
 end
 
 desc "deploy presto"

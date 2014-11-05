@@ -16,6 +16,7 @@ dependencies:
 
 test:
   override:
+    - rake compile
     - rake test:
         timeout: 3600
 
