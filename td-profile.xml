@@ -1,0 +1,21 @@
+<profile>
+  <id>td</id>
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>com.ning.maven.plugins</groupId>
+        <artifactId>maven-dependency-versions-check-plugin</artifactId>
+        <configuration>
+          <skip>true</skip>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+  <distributionManagement>
+    <repository>
+      <id>td-maven-repository</id>
+      <name>Treasure Data private repository</name>
+      <url>s3://td-maven-repository</url>
+    </repository>
+  </distributionManagement>
+</profile>

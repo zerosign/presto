@@ -23,6 +23,6 @@ deployment:
   all:
     branch: master
     commands:
-      - mvn versions:set -DgenerateBackupPoms=false -DnewVersion=0.79-${CIRCLE_SHA1}
-      - mvn package -DskipTests
+      - rake deploy
+
 
