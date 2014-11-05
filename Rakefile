@@ -1,7 +1,7 @@
 
 
 EXCLUDE_MODULES = %w|
- presto-cassandra presto-kafka presto-docs presto-server
+ presto-cassandra presto-kafka presto-docs
  presto-mysql presto-postgresql presto-hive
  presto-hive-hadoop1 presto-hive-hadoop2
  presto-hive-cdh4 presto-hive-cdh5|
@@ -20,12 +20,12 @@ end
 
 desc "compile codes"
 task "compile" do
-  sh "mvn -pl #{active_modules.join(",")} test-compile"
+  sh "mvn test-compile"
 end
 
 desc "run tests"
 task "test" do
-  sh "mvn -pl #{active_modules.join(",")} test"
+  sh "mvn test"
 end
 
 desc "deploy presto"
