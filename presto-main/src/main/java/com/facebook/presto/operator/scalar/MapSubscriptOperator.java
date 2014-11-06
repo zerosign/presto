@@ -48,19 +48,19 @@ public class MapSubscriptOperator
         extends ParametricOperator
 {
     public static final MapSubscriptOperator MAP_SUBSCRIPT = new MapSubscriptOperator();
-    private static final LoadingCache<CacheKey, JsonExtractor<?>> cache;
 
-    static
-    {
-        cache = CacheBuilder.newBuilder().expireAfterAccess(1, TimeUnit.MINUTES).maximumSize(1000).build(new CacheLoader<CacheKey, JsonExtractor<?>>() {
-            @Override
-            public JsonExtractor<?> load(CacheKey key)
-                    throws Exception
+    private static final LoadingCache<CacheKey, JsonExtractor<?>> CACHE = CacheBuilder.newBuilder()
+            .expireAfterAccess(1, TimeUnit.MINUTES)
+            .maximumSize(1000)
+            .build(new CacheLoader<CacheKey, JsonExtractor<?>>()
             {
-                return generateExtractor(format("$[\"%s\"]", key.getKey()), key.getType().getExtractor());
-            }
-        });
-    }
+                @Override
+                public JsonExtractor<?> load(CacheKey key)
+                        throws Exception
+                {
+                    return generateExtractor(format("$[\"%s\"]", key.getKey()), key.getType().getExtractor());
+                }
+            });
 
     protected MapSubscriptOperator()
     {
@@ -73,7 +73,7 @@ public class MapSubscriptOperator
         Type keyType = types.get("K");
         Type valueType = types.get("V");
 
-        Signature signature = new Signature(SUBSCRIPT.name(), valueType.getName(), parameterizedTypeName("map", keyType.getName(), valueType.getName()), keyType.getName());
+        Signature signature = new Signature(SUBSCRIPT.name(), valueType.getTypeSignature(), parameterizedTypeName("map", keyType.getTypeSignature(), valueType.getTypeSignature()), keyType.getTypeSignature());
         return new FunctionInfo(signature, "Map subscript", true, lookupMethod(keyType, valueType), true, true, ImmutableList.of(false, false));
     }
 
@@ -195,9 +195,10 @@ public class MapSubscriptOperator
         return subscript(map, key, ExtractorType.STRUCTURAL);
     }
 
+    @SuppressWarnings("unchecked")
     private static <T> T subscript(Slice map, Object key, ExtractorType type)
     {
-        JsonExtractor<?> extractor = cache.getUnchecked(new CacheKey(key.toString(), type));
+        JsonExtractor<?> extractor = CACHE.getUnchecked(new CacheKey(key.toString(), type));
         return (T) JsonExtract.extract(map, extractor);
     }
 
