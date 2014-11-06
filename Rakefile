@@ -1,4 +1,9 @@
-
+#
+# Treasure Data:
+# This script deploy jar packages with a version number that includes commit-hash of git
+# instead of -SNAPSHOT so that we can deploy specific commit to the production system. It
+# allows us to deploy hotfixes or improvements before stable releases.
+#
 
 EXCLUDE_MODULES = %w|
  presto-cassandra presto-kafka presto-docs

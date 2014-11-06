@@ -1,3 +1,6 @@
+#
+# see Rakefile
+#
 machine:
   java:
     version: oraclejdk8
@@ -21,11 +24,9 @@ test:
     # Do nothing since Presto tests cannot be finished under 4GB memory limit of CircleCI
     - echo skip tests
 
-
 deployment:
   all:
     branch: /.*/
     commands:
       - rake deploy
-
 
