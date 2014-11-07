@@ -40,9 +40,8 @@ task "test" do
   sh "mvn #{active_modules.join(",")} test"
 end
 
-desc "deploy presto"
-task "deploy" do
-
+desc "set unique version"
+task "set:revision" do
   require "rexml/document"
 
   # Read the current presto version
@@ -81,11 +80,14 @@ EOF
   # Dump pom.xml
   File.open('pom.xml', 'w'){|f| pom.write(f) }
 
+end
+
+desc "deploy presto"
+task "deploy" do
   # Deploy
   # Deploy presto-root
   sh "mvn deploy -P td -N -DskipTests"
   target_modules = presto_modules.keep_if{|m| m != 'presto-docs'}
   # Deploy presot modules
   sh "mvn deploy -P td -pl #{target_modules.join(",")} -DskipTests"
-
 end
