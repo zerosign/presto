@@ -40,8 +40,8 @@ task "test" do
   sh "mvn #{active_modules.join(",")} test"
 end
 
-desc "set unique version"
-task "set:revision" do
+desc "set a unique version and td-specific settings"
+task "update-pom" do
   require "rexml/document"
 
   # Read the current presto version
