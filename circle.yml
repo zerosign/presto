@@ -1,0 +1,32 @@
+#
+# see Rakefile
+#
+machine:
+  java:
+    version: oraclejdk8
+  environment:
+    MAVEN_OPTS: -Xmx3g
+    M2_HOME: $HOME/.m2/apache-maven-3.2.3  # .m2 is cached
+    M2:      $HOME/.m2/apache-maven-3.2.3/bin
+    PATH:    $HOME/.m2/apache-maven-3.2.3/bin:$PATH
+
+dependencies:
+  pre:
+    # install maven-3.2.3 required by Presto
+    - mkdir -p $(dirname $M2_HOME)
+    - test -d $M2_HOME || curl 'http://apache.cs.utah.edu/maven/maven-3/3.2.3/binaries/apache-maven-3.2.3-bin.tar.gz' | tar zxvf - -C $(dirname $M2_HOME)
+  override:
+    # Run mvn test-compile here to cache the compile-time dependencies
+    - rake compile
+
+test:
+  override:
+    # Do nothing since Presto tests cannot be finished under 4GB memory limit of CircleCI
+    - echo skip tests
+
+deployment:
+  all:
+    branch: /.*/
+    commands:
+      - rake deploy
+
