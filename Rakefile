@@ -82,7 +82,10 @@ EOF
   File.open('pom.xml', 'w'){|f| pom.write(f) }
 
   # Deploy
+  # Deploy presto-root
+  sh "mvn deploy -P td -N -DskipTests"
   target_modules = presto_modules.keep_if{|m| m != 'presto-docs'}
+  # Deploy presot modules
   sh "mvn deploy -P td -pl #{target_modules.join(",")} -DskipTests"
 
 end
