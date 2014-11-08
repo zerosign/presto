@@ -39,12 +39,14 @@ import com.facebook.presto.spi.SchemaNotFoundException;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.SchemaTablePrefix;
 import com.facebook.presto.spi.SerializableNativeValue;
+import com.facebook.presto.spi.SortedRangeSet;
 import com.facebook.presto.spi.TableNotFoundException;
 import com.facebook.presto.spi.TupleDomain;
 import com.facebook.presto.spi.ViewNotFoundException;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
+import com.facebook.presto.spi.type.TypeSignature;
 import com.google.common.base.Function;
 import com.google.common.base.Optional;
 import com.google.common.base.Predicate;
@@ -78,6 +80,7 @@ import org.apache.hadoop.hive.serde2.objectinspector.MapObjectInspector;
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector;
 import org.apache.hadoop.hive.serde2.objectinspector.PrimitiveObjectInspector;
 import org.apache.hadoop.hive.serde2.objectinspector.StructField;
+import org.apache.hadoop.hive.serde2.objectinspector.StructObjectInspector;
 import org.apache.hadoop.mapred.JobConf;
 import org.joda.time.DateTimeZone;
 
@@ -458,16 +461,27 @@ public class HiveClient
                 if (keyType == null || valueType == null) {
                     return null;
                 }
-                return typeManager.getParameterizedType(StandardTypes.MAP, ImmutableList.of(keyType.getTypeSignature(), valueType.getTypeSignature()));
+                return typeManager.getParameterizedType(StandardTypes.MAP, ImmutableList.of(keyType.getTypeSignature(), valueType.getTypeSignature()), ImmutableList.of());
             case LIST:
                 ListObjectInspector listObjectInspector = checkType(fieldInspector, ListObjectInspector.class, "fieldInspector");
                 Type elementType = getType(listObjectInspector.getListElementObjectInspector(), typeManager);
                 if (elementType == null) {
                     return null;
                 }
-                return typeManager.getParameterizedType(StandardTypes.ARRAY, ImmutableList.of(elementType.getTypeSignature()));
+                return typeManager.getParameterizedType(StandardTypes.ARRAY, ImmutableList.of(elementType.getTypeSignature()), ImmutableList.of());
             case STRUCT:
-                return VARCHAR;
+                StructObjectInspector structObjectInspector = checkType(fieldInspector, StructObjectInspector.class, "fieldInspector");
+                List<TypeSignature> fieldTypes = new ArrayList<>();
+                List<Object> fieldNames = new ArrayList<>();
+                for (StructField field : structObjectInspector.getAllStructFieldRefs()) {
+                    fieldNames.add(field.getFieldName());
+                    Type fieldType = getType(field.getFieldObjectInspector(), typeManager);
+                    if (fieldType == null) {
+                        return null;
+                    }
+                    fieldTypes.add(fieldType.getTypeSignature());
+                }
+                return typeManager.getParameterizedType(StandardTypes.ROW, fieldTypes, fieldNames);
             default:
                 throw new IllegalArgumentException("Unsupported hive type " + fieldInspector.getTypeName());
         }
@@ -1008,7 +1022,7 @@ public class HiveClient
         // do a final pass to filter based on fields that could not be used to build the prefix
         Map<String, ConnectorColumnHandle> partitionKeysByName = partitionKeysByNameBuilder.build();
         List<ConnectorPartition> partitions = FluentIterable.from(partitionNames)
-                .transform(toPartition(tableName, partitionKeysByName, bucket, timeZone, toHiveTupleDomain(effectivePredicate)))
+                .transform(toPartition(tableName, partitionKeysByName, bucket, timeZone, toCompactTupleDomain(effectivePredicate)))
                 .filter(partitionMatches(effectivePredicate))
                 .filter(ConnectorPartition.class)
                 .toList();
@@ -1369,15 +1383,20 @@ public class HiveClient
         };
     }
 
-    public static TupleDomain<HiveColumnHandle> toHiveTupleDomain(TupleDomain<ConnectorColumnHandle> effectivePredicate)
+    public static TupleDomain<HiveColumnHandle> toCompactTupleDomain(TupleDomain<ConnectorColumnHandle> effectivePredicate)
     {
-        return effectivePredicate.transform(new TupleDomain.Function<ConnectorColumnHandle, HiveColumnHandle>()
-        {
-            @Override
-            public HiveColumnHandle apply(ConnectorColumnHandle columnHandle)
-            {
-                return checkType(columnHandle, HiveColumnHandle.class, "ColumnHandle");
+        ImmutableMap.Builder<HiveColumnHandle, Domain> builder = ImmutableMap.builder();
+        for (Entry<ConnectorColumnHandle, Domain> entry : effectivePredicate.getDomains().entrySet()) {
+            HiveColumnHandle hiveColumnHandle = checkType(entry.getKey(), HiveColumnHandle.class, "ColumnHandle");
+
+            SortedRangeSet ranges = entry.getValue().getRanges();
+            if (!ranges.isNone()) {
+                // compact the range to a single span
+                ranges = SortedRangeSet.of(entry.getValue().getRanges().getSpan());
             }
-        });
+
+            builder.put(hiveColumnHandle, new Domain(ranges, entry.getValue().isNullAllowed()));
+        }
+        return TupleDomain.withColumnDomains(builder.build());
     }
 }
