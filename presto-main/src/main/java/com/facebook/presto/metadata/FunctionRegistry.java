@@ -43,12 +43,14 @@ import com.facebook.presto.operator.scalar.CombineHashFunction;
 import com.facebook.presto.operator.scalar.DateTimeFunctions;
 import com.facebook.presto.operator.scalar.HyperLogLogFunctions;
 import com.facebook.presto.operator.scalar.JsonFunctions;
+import com.facebook.presto.operator.scalar.JsonOperators;
 import com.facebook.presto.operator.scalar.MathFunctions;
 import com.facebook.presto.operator.scalar.RegexpFunctions;
 import com.facebook.presto.operator.scalar.StringFunctions;
 import com.facebook.presto.operator.scalar.UrlFunctions;
 import com.facebook.presto.operator.scalar.VarbinaryFunctions;
 import com.facebook.presto.operator.window.CumulativeDistributionFunction;
+import com.facebook.presto.operator.window.NTileFunction;
 import com.facebook.presto.operator.window.DenseRankFunction;
 import com.facebook.presto.operator.window.FirstValueFunction.BigintFirstValueFunction;
 import com.facebook.presto.operator.window.FirstValueFunction.BooleanFirstValueFunction;
@@ -128,6 +130,7 @@ import static com.facebook.presto.metadata.ParametricFunctionUtils.isAggregation
 import static com.facebook.presto.metadata.ParametricFunctionUtils.isHiddenPredicate;
 import static com.facebook.presto.operator.aggregation.CountColumn.COUNT_COLUMN;
 import static com.facebook.presto.operator.aggregation.MaxBy.MAX_BY;
+import static com.facebook.presto.operator.aggregation.MinBy.MIN_BY;
 import static com.facebook.presto.operator.scalar.ArrayCardinalityFunction.ARRAY_CARDINALITY;
 import static com.facebook.presto.operator.scalar.ArrayConstructor.ARRAY_CONSTRUCTOR;
 import static com.facebook.presto.operator.scalar.ArrayConcatFunction.ARRAY_CONCAT_FUNCTION;
@@ -138,6 +141,7 @@ import static com.facebook.presto.operator.scalar.ArraySubscriptOperator.ARRAY_S
 import static com.facebook.presto.operator.scalar.ArrayToJsonCast.ARRAY_TO_JSON;
 import static com.facebook.presto.operator.scalar.IdentityCast.IDENTITY_CAST;
 import static com.facebook.presto.operator.scalar.MapCardinalityFunction.MAP_CARDINALITY;
+import static com.facebook.presto.operator.scalar.MapConstructor.MAP_CONSTRUCTOR;
 import static com.facebook.presto.operator.scalar.MapSubscriptOperator.MAP_SUBSCRIPT;
 import static com.facebook.presto.operator.scalar.MapToJsonCast.MAP_TO_JSON;
 import static com.facebook.presto.operator.scalar.MapKeys.MAP_KEYS;
@@ -189,6 +193,7 @@ public class FunctionRegistry
                 .window("dense_rank", BIGINT, ImmutableList.<Type>of(), DenseRankFunction.class)
                 .window("percent_rank", DOUBLE, ImmutableList.<Type>of(), PercentRankFunction.class)
                 .window("cume_dist", DOUBLE, ImmutableList.<Type>of(), CumulativeDistributionFunction.class)
+                .window("ntile", BIGINT, ImmutableList.<Type>of(BIGINT), NTileFunction.class)
                 .window("first_value", BIGINT, ImmutableList.<Type>of(BIGINT), BigintFirstValueFunction.class)
                 .window("first_value", DOUBLE, ImmutableList.<Type>of(DOUBLE), DoubleFirstValueFunction.class)
                 .window("first_value", BOOLEAN, ImmutableList.<Type>of(BOOLEAN), BooleanFirstValueFunction.class)
@@ -271,6 +276,7 @@ public class FunctionRegistry
                 .scalar(LikeFunctions.class)
                 .scalar(ArrayFunctions.class)
                 .scalar(CombineHashFunction.class)
+                .scalar(JsonOperators.class)
                 .function(ARRAY_CONSTRUCTOR)
                 .function(ARRAY_SUBSCRIPT)
                 .function(ARRAY_CARDINALITY)
@@ -278,10 +284,12 @@ public class FunctionRegistry
                 .function(ARRAY_TO_ELEMENT_CONCAT_FUNCTION)
                 .function(ELEMENT_TO_ARRAY_CONCAT_FUNCTION)
                 .function(ARRAY_SORT_FUNCTION)
+                .function(MAP_CONSTRUCTOR)
                 .function(MAP_CARDINALITY)
                 .function(MAP_SUBSCRIPT)
                 .function(IDENTITY_CAST)
                 .function(MAX_BY)
+                .function(MIN_BY)
                 .function(COUNT_COLUMN)
                 .function(ARRAY_TO_JSON)
                 .function(MAP_TO_JSON)

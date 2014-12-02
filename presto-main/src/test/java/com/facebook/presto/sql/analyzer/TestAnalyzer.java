@@ -111,10 +111,25 @@ public class TestAnalyzer
     }
 
     @Test
-    public void testNonComparableDistinct()
+    public void testNonComparableDistinctAggregation()
             throws Exception
     {
         assertFails(TYPE_MISMATCH, "SELECT count(DISTINCT x) FROM (SELECT approx_set(1) x)");
+    }
+
+    @Test
+    public void testNonComparableDistinct()
+            throws Exception
+    {
+        assertFails(TYPE_MISMATCH, "SELECT DISTINCT * FROM (SELECT approx_set(1) x)");
+        assertFails(TYPE_MISMATCH, "SELECT DISTINCT x FROM (SELECT approx_set(1) x)");
+    }
+
+    @Test
+    public void testInSubqueryTypes()
+            throws Exception
+    {
+        assertFails(TYPE_MISMATCH, "SELECT * FROM (VALUES ('a')) t(y) WHERE y IN (VALUES (1))");
     }
 
     @Test
@@ -160,6 +175,15 @@ public class TestAnalyzer
     {
         assertFails(INVALID_ORDINAL, "SELECT * FROM t1 ORDER BY 10");
         assertFails(INVALID_ORDINAL, "SELECT * FROM t1 ORDER BY 0");
+    }
+
+    @Test
+    public void testOrderByNonComparable()
+            throws Exception
+    {
+        assertFails(TYPE_MISMATCH, "SELECT x FROM (SELECT approx_set(1) x) ORDER BY 1");
+        assertFails(TYPE_MISMATCH, "SELECT * FROM (SELECT approx_set(1) x) ORDER BY 1");
+        assertFails(TYPE_MISMATCH, "SELECT x FROM (SELECT approx_set(1) x) ORDER BY x");
     }
 
     @Test
@@ -582,9 +606,9 @@ public class TestAnalyzer
     public void testMismatchedUnionQueries()
             throws Exception
     {
-        assertFails(MISMATCHED_SET_COLUMN_TYPES, "SELECT 1 UNION SELECT 'a'");
-        assertFails(MISMATCHED_SET_COLUMN_TYPES, "SELECT a FROM t1 UNION SELECT 'a'");
-        assertFails(MISMATCHED_SET_COLUMN_TYPES, "(SELECT 1) UNION SELECT 'a'");
+        assertFails(TYPE_MISMATCH, "SELECT 1 UNION SELECT 'a'");
+        assertFails(TYPE_MISMATCH, "SELECT a FROM t1 UNION SELECT 'a'");
+        assertFails(TYPE_MISMATCH, "(SELECT 1) UNION SELECT 'a'");
         assertFails(MISMATCHED_SET_COLUMN_TYPES, "SELECT 1, 2 UNION SELECT 1");
         assertFails(MISMATCHED_SET_COLUMN_TYPES, "SELECT 'a' UNION SELECT 'b', 'c'");
         assertFails(MISMATCHED_SET_COLUMN_TYPES, "TABLE t2 UNION SELECT 'a'");

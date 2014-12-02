@@ -15,24 +15,16 @@ package com.facebook.presto.operator.aggregation;
 
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.metadata.Signature;
-import com.facebook.presto.operator.aggregation.state.MaxOrMinByState;
-import com.facebook.presto.operator.aggregation.state.MaxOrMinByStateFactory;
-import com.facebook.presto.operator.aggregation.state.MaxOrMinByStateSerializer;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.BlockBuilderStatus;
-import com.facebook.presto.spi.block.VariableWidthBlockBuilder;
 import com.facebook.presto.spi.type.AbstractFixedWidthType;
-import com.facebook.presto.spi.type.DoubleType;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.VarcharType;
 import com.facebook.presto.type.TypeRegistry;
 import com.google.common.base.Predicate;
 import com.google.common.collect.FluentIterable;
-import io.airlift.slice.Slices;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
@@ -43,10 +35,9 @@ import static com.facebook.presto.block.BlockAssertions.createStringsBlock;
 import static com.facebook.presto.operator.aggregation.AggregationTestUtils.assertAggregation;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static io.airlift.slice.SizeOf.SIZE_OF_DOUBLE;
-import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
 
-public class TestMaxByAggregation
+public class TestMinByAggregation
 {
     private static final MetadataManager metadata = new MetadataManager();
 
@@ -70,7 +61,7 @@ public class TestMaxByAggregation
 
         for (Type keyType : orderableTypes) {
             for (Type valueType : metadata.getTypeManager().getTypes()) {
-                assertNotNull(metadata.getExactFunction(new Signature("max_by", valueType.getTypeSignature(), valueType.getTypeSignature(), keyType.getTypeSignature())));
+                assertNotNull(metadata.getExactFunction(new Signature("min_by", valueType.getTypeSignature(), valueType.getTypeSignature(), keyType.getTypeSignature())));
             }
         }
     }
@@ -79,11 +70,11 @@ public class TestMaxByAggregation
     public void testNull()
             throws Exception
     {
-        InternalAggregationFunction doubleDouble = metadata.getExactFunction(new Signature("max_by", StandardTypes.DOUBLE, StandardTypes.DOUBLE, StandardTypes.DOUBLE)).getAggregationFunction();
+        InternalAggregationFunction doubleDouble = metadata.getExactFunction(new Signature("min_by", StandardTypes.DOUBLE, StandardTypes.DOUBLE, StandardTypes.DOUBLE)).getAggregationFunction();
         assertAggregation(
                 doubleDouble,
                 1.0,
-                null,
+                1.0,
                 createPage(
                         new Double[] {1.0, null},
                         new Double[] {1.0, 2.0}));
@@ -93,7 +84,7 @@ public class TestMaxByAggregation
     public void testDoubleDouble()
             throws Exception
     {
-        InternalAggregationFunction doubleDouble = metadata.getExactFunction(new Signature("max_by", StandardTypes.DOUBLE, StandardTypes.DOUBLE, StandardTypes.DOUBLE)).getAggregationFunction();
+        InternalAggregationFunction doubleDouble = metadata.getExactFunction(new Signature("min_by", StandardTypes.DOUBLE, StandardTypes.DOUBLE, StandardTypes.DOUBLE)).getAggregationFunction();
         assertAggregation(
                 doubleDouble,
                 1.0,
@@ -108,73 +99,41 @@ public class TestMaxByAggregation
         assertAggregation(
                 doubleDouble,
                 1.0,
-                2.0,
+                3.0,
                 createPage(
                         new Double[] {3.0, 2.0},
                         new Double[] {1.0, 1.5}),
                 createPage(
-                        new Double[] {null},
-                        new Double[] {null}));
+                        new Double[] {5.0, 3.0},
+                        new Double[] {2.0, 4.0}));
     }
 
     @Test
     public void testDoubleVarchar()
             throws Exception
     {
-        InternalAggregationFunction doubleVarchar = metadata.getExactFunction(new Signature("max_by", StandardTypes.VARCHAR, StandardTypes.VARCHAR, StandardTypes.DOUBLE)).getAggregationFunction();
+        InternalAggregationFunction doubleVarchar = metadata.getExactFunction(new Signature("min_by", StandardTypes.VARCHAR, StandardTypes.VARCHAR, StandardTypes.DOUBLE)).getAggregationFunction();
+        assertAggregation(
+                doubleVarchar,
+                1.0,
+                "z",
+                createPage(
+                        new String[] {"z", "a"},
+                        new Double[] {1.0, 2.0}),
+                createPage(
+                        new String[] {"x", "b"},
+                        new Double[] {2.0, 3.0}));
+
         assertAggregation(
                 doubleVarchar,
                 1.0,
                 "a",
                 createPage(
-                        new String[] {"z", "a"},
-                        new Double[] {1.0, 2.0}),
-                createPage(
-                        new String[] {null},
-                        new Double[] {null}));
-
-        assertAggregation(
-                doubleVarchar,
-                1.0,
-                "hi",
-                createPage(
                         new String[] {"zz", "hi"},
                         new Double[] {0.0, 1.0}),
                 createPage(
-                        new String[] {null, "a"},
-                        new Double[] {null, -1.0}));
-    }
-
-    @Test
-    public void testStateDeserializer()
-            throws Exception
-    {
-        String[] keys = new String[] {"loooooong string", "short string"};
-        double[] values = new double[] { 3.14, 2.71 };
-
-        MaxOrMinByStateSerializer serializer = new MaxOrMinByStateSerializer();
-        BlockBuilder builder = new VariableWidthBlockBuilder(new BlockBuilderStatus());
-
-        for (int i = 0; i < keys.length; i++) {
-            serializer.serialize(makeState(keys[i], values[i]), builder);
-        }
-
-        Block serialized = builder.build();
-
-        for (int i = 0; i < keys.length; i++) {
-            MaxOrMinByState deserialized = new MaxOrMinByStateFactory(DoubleType.DOUBLE, VarcharType.VARCHAR).createSingleState();
-            serializer.deserialize(serialized, i, deserialized);
-            assertEquals(VarcharType.VARCHAR.getSlice(deserialized.getKey(), 0), Slices.utf8Slice(keys[i]));
-            assertEquals(DoubleType.DOUBLE.getDouble(deserialized.getValue(), 0), values[i]);
-        }
-    }
-
-    private static MaxOrMinByState makeState(String key, double value)
-    {
-        MaxOrMinByState result = new MaxOrMinByStateFactory(DoubleType.DOUBLE, VarcharType.VARCHAR).createSingleState();
-        result.setKey(createStringsBlock(key));
-        result.setValue(createDoublesBlock(value));
-        return result;
+                        new String[] {"bb", "a"},
+                        new Double[] {2.0, -1.0}));
     }
 
     private static Page createPage(Double[] values, Double[] keys)

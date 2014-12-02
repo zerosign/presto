@@ -371,8 +371,23 @@ public class TupleAnalyzer
 
         for (Relation relation : Iterables.skip(node.getRelations(), 1)) {
             TupleDescriptor descriptor = analyzer.process(relation, context);
-            if (!elementsEqual(transform(outputDescriptor.getVisibleFields(), typeGetter()), transform(descriptor.getVisibleFields(), typeGetter()))) {
-                throw new SemanticException(MISMATCHED_SET_COLUMN_TYPES, node, "Union query terms have mismatched columns");
+            int outputFieldSize = outputDescriptor.getVisibleFields().size();
+            int descFieldSize = descriptor.getVisibleFields().size();
+            if (outputFieldSize != descFieldSize) {
+                throw new SemanticException(MISMATCHED_SET_COLUMN_TYPES,
+                                            node,
+                                            "union query has different number of fields: %d, %d",
+                                            outputFieldSize, descFieldSize);
+            }
+            for (int i = 0; i < descriptor.getVisibleFields().size(); i++) {
+                Type outputFieldType = outputDescriptor.getFieldByIndex(i).getType();
+                Type descFieldType = descriptor.getFieldByIndex(i).getType();
+                if (outputFieldType != descFieldType) {
+                    throw new SemanticException(TYPE_MISMATCH,
+                                                node,
+                                                "column %d in union query has incompatible types: %s, %s",
+                                                i, outputFieldType.getDisplayName(), descFieldType.getDisplayName());
+                }
             }
         }
 
@@ -724,6 +739,19 @@ public class TupleAnalyzer
                     }
 
                     orderByExpression = outputExpressions.get((int) (ordinal - 1));
+
+                    if (orderByExpression.isExpression()) {
+                        Type type = analysis.getType(orderByExpression.getExpression());
+                        if (!type.isOrderable()) {
+                            throw new SemanticException(TYPE_MISMATCH, node, "The type of expression in position %s is not orderable (actual: %s), and therefore cannot be used in ORDER BY: %s", ordinal, type, orderByExpression);
+                        }
+                    }
+                    else {
+                        Type type = tupleDescriptor.getFieldByIndex(orderByExpression.getFieldIndex()).getType();
+                        if (!type.isOrderable()) {
+                            throw new SemanticException(TYPE_MISMATCH, node, "The type of expression in position %s is not orderable (actual: %s), and therefore cannot be used in ORDER BY", ordinal, type);
+                        }
+                    }
                 }
 
                 // otherwise, just use the expression as is
@@ -741,6 +769,11 @@ public class TupleAnalyzer
                             context,
                             orderByExpression.getExpression());
                     analysis.addInPredicates(node, expressionAnalysis.getSubqueryInPredicates());
+
+                    Type type = expressionAnalysis.getType(orderByExpression.getExpression());
+                    if (!type.isOrderable()) {
+                        throw new SemanticException(TYPE_MISMATCH, node, "Type %s is not orderable, and therefore cannot be used in ORDER BY: %s", type, expression);
+                    }
                 }
 
                 orderByExpressionsBuilder.add(orderByExpression);
@@ -860,6 +893,10 @@ public class TupleAnalyzer
                 for (Field field : fields) {
                     int fieldIndex = tupleDescriptor.indexOf(field);
                     outputExpressionBuilder.add(new FieldOrExpression(fieldIndex));
+
+                    if (node.getSelect().isDistinct() && !field.getType().isComparable())  {
+                        throw new SemanticException(TYPE_MISMATCH, node.getSelect(), "DISTINCT can only be applied to comparable types (actual: %s)", field.getType());
+                    }
                 }
             }
             else if (item instanceof SingleColumn) {
@@ -874,6 +911,11 @@ public class TupleAnalyzer
                         column.getExpression());
                 analysis.addInPredicates(node, expressionAnalysis.getSubqueryInPredicates());
                 outputExpressionBuilder.add(new FieldOrExpression(column.getExpression()));
+
+                Type type = expressionAnalysis.getType(column.getExpression());
+                if (node.getSelect().isDistinct() && !type.isComparable())  {
+                    throw new SemanticException(TYPE_MISMATCH, node.getSelect(), "DISTINCT can only be applied to comparable types (actual: %s): %s", type, column.getExpression());
+                }
             }
             else {
                 throw new IllegalArgumentException("Unsupported SelectItem type: " + item.getClass().getName());
