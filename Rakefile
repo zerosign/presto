@@ -32,7 +32,7 @@ end
 
 desc "compile codes"
 task "compile" do
-  sh "mvn test-compile"
+  sh "mvn test-compile install -DskipTests"
 end
 
 desc "run tests"
