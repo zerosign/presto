@@ -23,8 +23,7 @@ end
 
 def active_modules
   modules = []
-  presto_modules.each{|m|
-    m_name = m.text
+  presto_modules.each{|m_name|
     modules << m_name if EXCLUDE_MODULES.none? {|e| e == m_name }
   }
   modules
@@ -32,7 +31,8 @@ end
 
 desc "compile codes"
 task "compile" do
-  sh "mvn test-compile install -DskipTests"
+  target_modules = presto_modules.keep_if{|m| m != 'presto-docs'}
+  sh "mvn test-compile package -pl #{target_modules.join(",")} -DskipTests"
 end
 
 desc "run tests"
