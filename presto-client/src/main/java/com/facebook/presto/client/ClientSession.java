@@ -17,6 +17,7 @@ import com.google.common.collect.ImmutableMap;
 
 import java.net.URI;
 import java.nio.charset.CharsetEncoder;
+import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -38,31 +39,34 @@ public class ClientSession
     private final Map<String, String> properties;
     private final boolean debug;
 
-    public static ClientSession withCatalog(ClientSession session, String catalog)
+    public static ClientSession withCatalogAndSchema(ClientSession session, String catalog, String schema)
     {
         return new ClientSession(
                 session.getServer(),
                 session.getUser(),
                 session.getSource(),
                 catalog,
-                session.getSchema(),
+                schema,
                 session.getTimeZoneId(),
                 session.getLocale(),
                 session.getProperties(),
                 session.isDebug());
     }
 
-    public static ClientSession withSchema(ClientSession session, String schema)
+    public static ClientSession withSessionProperties(ClientSession session, Map<String, String> sessionProperties)
     {
+        Map<String, String> properties = new HashMap<>(session.getProperties());
+        properties.putAll(sessionProperties);
+
         return new ClientSession(
                 session.getServer(),
                 session.getUser(),
                 session.getSource(),
                 session.getCatalog(),
-                schema,
+                session.getSchema(),
                 session.getTimeZoneId(),
                 session.getLocale(),
-                session.getProperties(),
+                properties,
                 session.isDebug());
     }
 
