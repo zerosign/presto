@@ -22,8 +22,8 @@ import com.facebook.presto.operator.aggregation.ApproximateLongPercentileAggrega
 import com.facebook.presto.operator.aggregation.ApproximateSetAggregation;
 import com.facebook.presto.operator.aggregation.ApproximateSumAggregations;
 import com.facebook.presto.operator.aggregation.AverageAggregations;
-import com.facebook.presto.operator.aggregation.BooleanMaxAggregation;
-import com.facebook.presto.operator.aggregation.BooleanMinAggregation;
+import com.facebook.presto.operator.aggregation.BooleanAndAggregation;
+import com.facebook.presto.operator.aggregation.BooleanOrAggregation;
 import com.facebook.presto.operator.aggregation.CountAggregation;
 import com.facebook.presto.operator.aggregation.CountIfAggregation;
 import com.facebook.presto.operator.aggregation.DoubleMaxAggregation;
@@ -125,6 +125,7 @@ import java.util.Set;
 
 import static com.facebook.presto.operator.aggregation.ArbitraryAggregation.ARBITRARY_AGGREGATION;
 import static com.facebook.presto.operator.aggregation.CountColumn.COUNT_COLUMN;
+import static com.facebook.presto.operator.aggregation.MapAggregation.MAP_AGG;
 import static com.facebook.presto.operator.aggregation.MaxBy.MAX_BY;
 import static com.facebook.presto.operator.aggregation.MinBy.MIN_BY;
 import static com.facebook.presto.operator.scalar.ArrayCardinalityFunction.ARRAY_CARDINALITY;
@@ -144,6 +145,8 @@ import static com.facebook.presto.operator.scalar.ArrayToJsonCast.ARRAY_TO_JSON;
 import static com.facebook.presto.operator.scalar.ElementToArrayConcatFunction.ELEMENT_TO_ARRAY_CONCAT_FUNCTION;
 import static com.facebook.presto.operator.scalar.Greatest.GREATEST;
 import static com.facebook.presto.operator.scalar.IdentityCast.IDENTITY_CAST;
+import static com.facebook.presto.operator.scalar.JsonToArrayCast.JSON_TO_ARRAY;
+import static com.facebook.presto.operator.scalar.JsonToMapCast.JSON_TO_MAP;
 import static com.facebook.presto.operator.scalar.Least.LEAST;
 import static com.facebook.presto.operator.scalar.MapCardinalityFunction.MAP_CARDINALITY;
 import static com.facebook.presto.operator.scalar.MapConstructor.MAP_CONSTRUCTOR;
@@ -244,8 +247,8 @@ public class FunctionRegistry
                 .aggregate(ApproximateLongPercentileAggregations.class)
                 .aggregate(ApproximateDoublePercentileAggregations.class)
                 .aggregate(CountIfAggregation.class)
-                .aggregate(BooleanMinAggregation.class)
-                .aggregate(BooleanMaxAggregation.class)
+                .aggregate(BooleanAndAggregation.class)
+                .aggregate(BooleanOrAggregation.class)
                 .aggregate(DoubleMinAggregation.class)
                 .aggregate(DoubleMaxAggregation.class)
                 .aggregate(LongMinAggregation.class)
@@ -287,8 +290,9 @@ public class FunctionRegistry
                 .scalar(CombineHashFunction.class)
                 .scalar(JsonOperators.class)
                 .functions(ARRAY_HASH_CODE, ARRAY_EQUAL, ARRAY_NOT_EQUAL, ARRAY_LESS_THAN, ARRAY_LESS_THAN_OR_EQUAL, ARRAY_GREATER_THAN, ARRAY_GREATER_THAN_OR_EQUAL)
-                .functions(ARRAY_CONSTRUCTOR, ARRAY_SUBSCRIPT, ARRAY_CARDINALITY, ARRAY_CONCAT_FUNCTION, ARRAY_TO_ELEMENT_CONCAT_FUNCTION, ELEMENT_TO_ARRAY_CONCAT_FUNCTION, ARRAY_SORT_FUNCTION, ARRAY_TO_JSON)
-                .functions(MAP_CONSTRUCTOR, MAP_CARDINALITY, MAP_SUBSCRIPT, MAP_TO_JSON, MAP_KEYS, MAP_VALUES)
+                .functions(ARRAY_CONCAT_FUNCTION, ARRAY_TO_ELEMENT_CONCAT_FUNCTION, ELEMENT_TO_ARRAY_CONCAT_FUNCTION)
+                .functions(ARRAY_CONSTRUCTOR, ARRAY_SUBSCRIPT, ARRAY_CARDINALITY, ARRAY_SORT_FUNCTION, ARRAY_TO_JSON, JSON_TO_ARRAY)
+                .functions(MAP_CONSTRUCTOR, MAP_CARDINALITY, MAP_SUBSCRIPT, MAP_TO_JSON, JSON_TO_MAP, MAP_KEYS, MAP_VALUES, MAP_AGG)
                 .function(IDENTITY_CAST)
                 .function(ARBITRARY_AGGREGATION)
                 .function(LEAST)
@@ -330,7 +334,7 @@ public class FunctionRegistry
         return Iterables.any(functions.get(name), ParametricFunction::isAggregate);
     }
 
-    public FunctionInfo resolveFunction(QualifiedName name, List<TypeSignature> parameterTypes, final boolean approximate)
+    public FunctionInfo resolveFunction(QualifiedName name, List<TypeSignature> parameterTypes, boolean approximate)
     {
         List<ParametricFunction> candidates = functions.get(name).stream()
                 .filter(function -> function.isScalar() || function.isApproximate() == approximate)
@@ -443,7 +447,7 @@ public class FunctionRegistry
     @VisibleForTesting
     public List<ParametricFunction> listOperators()
     {
-        final Set<String> operatorNames = Arrays.asList(OperatorType.values()).stream()
+        Set<String> operatorNames = Arrays.asList(OperatorType.values()).stream()
                 .map(FunctionRegistry::mangleOperatorName)
                 .collect(toImmutableSet());
 
@@ -470,16 +474,11 @@ public class FunctionRegistry
 
     public FunctionInfo getCoercion(Type fromType, Type toType)
     {
-        return getExactOperator(OperatorType.CAST, ImmutableList.of(fromType), toType);
-    }
-
-    private FunctionInfo getExactOperator(OperatorType operatorType, List<? extends Type> argumentTypes, Type returnType)
-            throws OperatorNotFoundException
-    {
-        FunctionInfo functionInfo = getExactFunction(Signature.internalOperator(operatorType.name(), returnType.getTypeSignature(), Lists.transform(argumentTypes, Type::getTypeSignature)));
+        List<? extends Type> argumentTypes = ImmutableList.of(fromType);
+        FunctionInfo functionInfo = getExactFunction(Signature.internalOperator(OperatorType.CAST.name(), toType.getTypeSignature(), Lists.transform(argumentTypes, Type::getTypeSignature)));
 
         if (functionInfo == null) {
-            throw new OperatorNotFoundException(operatorType, argumentTypes, returnType);
+            throw new OperatorNotFoundException(OperatorType.CAST, argumentTypes, toType);
         }
         return functionInfo;
     }

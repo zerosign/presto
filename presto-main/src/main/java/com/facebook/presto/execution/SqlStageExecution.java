@@ -23,17 +23,18 @@ import com.facebook.presto.execution.StateMachine.StateChangeListener;
 import com.facebook.presto.metadata.Split;
 import com.facebook.presto.operator.TaskStats;
 import com.facebook.presto.spi.Node;
+import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.StandardErrorCode;
 import com.facebook.presto.split.RemoteSplit;
 import com.facebook.presto.split.SplitSource;
 import com.facebook.presto.sql.planner.PlanFragment;
 import com.facebook.presto.sql.planner.PlanFragment.OutputPartitioning;
 import com.facebook.presto.sql.planner.PlanFragment.PlanDistribution;
 import com.facebook.presto.sql.planner.StageExecutionPlan;
-import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.PlanFragmentId;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
-import com.facebook.presto.sql.planner.plan.SinkNode;
+import com.facebook.presto.sql.planner.plan.RemoteSourceNode;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Functions;
 import com.google.common.base.Throwables;
@@ -89,7 +90,6 @@ import static com.google.common.collect.Iterables.any;
 import static com.google.common.collect.Iterables.transform;
 import static io.airlift.http.client.HttpUriBuilder.uriBuilderFrom;
 import static io.airlift.units.DataSize.Unit.BYTE;
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 @ThreadSafe
@@ -142,7 +142,7 @@ public class SqlStageExecution
     private final NodeTaskMap nodeTaskMap;
 
     // Note: atomic is needed to assure thread safety between constructor and scheduler thread
-    private final AtomicReference<Multimap<PlanNodeId, URI>> exchangeLocations = new AtomicReference<Multimap<PlanNodeId, URI>>(ImmutableMultimap.<PlanNodeId, URI>of());
+    private final AtomicReference<Multimap<PlanNodeId, URI>> exchangeLocations = new AtomicReference<>(ImmutableMultimap.<PlanNodeId, URI>of());
 
     public SqlStageExecution(QueryId queryId,
             LocationFactory locationFactory,
@@ -244,7 +244,7 @@ public class SqlStageExecution
     {
         try (SetThreadName setThreadName = new SetThreadName("Stage-%s", stageId)) {
             if (stageId.equals(this.stageId)) {
-                cancel(true);
+                cancel();
             }
             else {
                 for (StageExecutionNode subStage : subStages.values()) {
@@ -460,16 +460,16 @@ public class SqlStageExecution
 
         ImmutableMultimap.Builder<PlanNodeId, URI> newExchangeLocations = ImmutableMultimap.builder();
         for (PlanNode planNode : fragment.getSources()) {
-            if (planNode instanceof ExchangeNode) {
-                ExchangeNode exchangeNode = (ExchangeNode) planNode;
-                for (PlanFragmentId planFragmentId : exchangeNode.getSourceFragmentIds()) {
+            if (planNode instanceof RemoteSourceNode) {
+                RemoteSourceNode remoteSourceNode = (RemoteSourceNode) planNode;
+                for (PlanFragmentId planFragmentId : remoteSourceNode.getSourceFragmentIds()) {
                     StageExecutionNode subStage = subStages.get(planFragmentId);
                     checkState(subStage != null, "Unknown sub stage %s, known stages %s", planFragmentId, subStages.keySet());
 
                     // add new task locations
                     for (URI taskLocation : subStage.getTaskLocations()) {
-                        if (!exchangeLocations.containsEntry(exchangeNode.getId(), taskLocation)) {
-                            newExchangeLocations.putAll(exchangeNode.getId(), taskLocation);
+                        if (!exchangeLocations.containsEntry(remoteSourceNode.getId(), taskLocation)) {
+                            newExchangeLocations.putAll(remoteSourceNode.getId(), taskLocation);
                         }
                     }
                 }
@@ -538,7 +538,7 @@ public class SqlStageExecution
                 }
 
                 // schedule tasks
-                if (fragment.getDistribution() == PlanDistribution.NONE) {
+                if (fragment.getDistribution() == PlanDistribution.SINGLE) {
                     scheduleFixedNodeCount(1);
                 }
                 else if (fragment.getDistribution() == PlanDistribution.FIXED) {
@@ -568,7 +568,7 @@ public class SqlStageExecution
                         stageState.set(StageState.FAILED);
                     }
                     log.error(e, "Error while starting stage %s", stageId);
-                    cancel(true);
+                    abort();
                     if (e instanceof InterruptedException) {
                         Thread.currentThread().interrupt();
                     }
@@ -847,10 +847,10 @@ public class SqlStageExecution
     private Set<PlanNodeId> updateCompleteSources()
     {
         for (PlanNode planNode : fragment.getSources()) {
-            if (!completeSources.contains(planNode.getId()) && planNode instanceof ExchangeNode) {
-                ExchangeNode exchangeNode = (ExchangeNode) planNode;
+            if (!completeSources.contains(planNode.getId()) && planNode instanceof RemoteSourceNode) {
+                RemoteSourceNode remoteSourceNode = (RemoteSourceNode) planNode;
                 boolean exchangeFinished = true;
-                for (PlanFragmentId planFragmentId : exchangeNode.getSourceFragmentIds()) {
+                for (PlanFragmentId planFragmentId : remoteSourceNode.getSourceFragmentIds()) {
                     StageExecutionNode subStage = subStages.get(planFragmentId);
                     switch (subStage.getState()) {
                         case PLANNED:
@@ -883,13 +883,18 @@ public class SqlStageExecution
                 }
 
                 List<StageState> subStageStates = ImmutableList.copyOf(transform(transform(subStages.values(), StageExecutionNode::getStageInfo), StageInfo::getState));
-                if (any(subStageStates, equalTo(StageState.FAILED))) {
-                    stageState.set(StageState.FAILED);
+                if (subStageStates.stream().anyMatch(StageState::isFailure)) {
+                    stageState.set(StageState.ABORTED);
                 }
                 else {
                     List<TaskState> taskStates = ImmutableList.copyOf(transform(transform(tasks.values(), RemoteTask::getTaskInfo), TaskInfo::getState));
                     if (any(taskStates, equalTo(TaskState.FAILED))) {
                         stageState.set(StageState.FAILED);
+                    }
+                    else if (any(taskStates, equalTo(TaskState.ABORTED))) {
+                        // A task should only be in the aborted state if the STAGE is done (ABORTED or FAILED)
+                        stageState.set(StageState.FAILED);
+                        failureCauses.add(new PrestoException(StandardErrorCode.INTERNAL_ERROR, "A task is in the ABORTED state but stage is " + stageState));
                     }
                     else if (currentState != StageState.PLANNED && currentState != StageState.SCHEDULING) {
                         // all tasks are now scheduled, so we can check the finished state
@@ -903,56 +908,74 @@ public class SqlStageExecution
                 }
             }
 
-            if (stageState.get().isDone()) {
-                // finish tasks and stages
-                cancel(false);
+            // finish tasks and stages if stage is complete
+            StageState stageState = this.stageState.get();
+            if (stageState == StageState.ABORTED) {
+                abort();
+            }
+            else if (stageState.isDone()) {
+                cancel();
             }
         }
     }
 
     @Override
-    public void cancel(boolean force)
+    public void cancel()
     {
         checkState(!Thread.holdsLock(this), "Can not cancel while holding a lock on this");
 
         try (SetThreadName setThreadName = new SetThreadName("Stage-%s", stageId)) {
-            // before canceling the task wait to see if it finishes normally
-            if (!force) {
-                Duration waitTime = new Duration(100, MILLISECONDS);
-                for (RemoteTask remoteTask : tasks.values()) {
-                    try {
-                        waitTime = remoteTask.waitForTaskToFinish(waitTime);
-                    }
-                    catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        throw Throwables.propagate(e);
-                    }
-                }
-            }
-            // check if the task completed naturally
+            // check if the stage already completed naturally
             doUpdateState();
-
-            // transition to canceled state, only if not already finished
             synchronized (this) {
-                if (!stageState.get().isDone()) {
-                    log.debug("Cancelling stage %s", stageId);
-                    stageState.set(StageState.CANCELED);
+                if (stageState.get().isDone()) {
+                    return;
                 }
+
+                log.debug("Cancelling stage %s", stageId);
+                stageState.set(StageState.CANCELED);
             }
 
-            // make sure all tasks are done
+            // cancel all tasks
             for (RemoteTask task : tasks.values()) {
                 task.cancel();
             }
 
-            // propagate update to tasks and stages
+            // propagate cancel to sub-stages
             for (StageExecutionNode subStage : subStages.values()) {
-                subStage.cancel(force);
+                subStage.cancel();
             }
         }
     }
 
-    private Split createRemoteSplitFor(TaskId taskId, URI taskLocation)
+    @Override
+    public void abort()
+    {
+        checkState(!Thread.holdsLock(this), "Can not abort while holding a lock on this");
+
+        try (SetThreadName setThreadName = new SetThreadName("Stage-%s", stageId)) {
+            // transition to aborted state, only if not already finished
+            doUpdateState();
+            synchronized (this) {
+                if (!stageState.get().isDone()) {
+                    log.debug("Aborting stage %s", stageId);
+                    stageState.set(StageState.ABORTED);
+                }
+            }
+
+            // abort all tasks
+            for (RemoteTask task : tasks.values()) {
+                task.abort();
+            }
+
+            // propagate abort to sub-stages
+            for (StageExecutionNode subStage : subStages.values()) {
+                subStage.abort();
+            }
+        }
+    }
+
+    private static Split createRemoteSplitFor(TaskId taskId, URI taskLocation)
     {
         URI splitLocation = uriBuilderFrom(taskLocation).appendPath("results").appendPath(taskId.toString()).build();
         return new Split("remote", new RemoteSplit(splitLocation));
@@ -976,7 +999,6 @@ public class SqlStageExecution
     private static List<Integer> getPartitioningChannels(PlanFragment fragment)
     {
         checkState(fragment.getOutputPartitioning() == OutputPartitioning.HASH, "fragment is not hash partitioned");
-        checkState(fragment.getRoot() instanceof SinkNode, "root is not an instance of SinkNode");
         // We can convert the symbols directly into channels, because the root must be a sink and therefore the layout is fixed
         return fragment.getPartitionBy().stream()
                 .map(symbol -> fragment.getRoot().getOutputSymbols().indexOf(symbol))
@@ -1006,5 +1028,7 @@ interface StageExecutionNode
 
     void cancelStage(StageId stageId);
 
-    void cancel(boolean force);
+    void cancel();
+
+    void abort();
 }

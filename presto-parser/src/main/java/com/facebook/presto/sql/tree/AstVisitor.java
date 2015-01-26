@@ -42,7 +42,7 @@ public abstract class AstVisitor<R, C>
         return visitExpression(node, context);
     }
 
-    protected R visitArithmeticExpression(ArithmeticExpression node, C context)
+    protected R visitArithmeticBinary(ArithmeticBinaryExpression node, C context)
     {
         return visitExpression(node, context);
     }
@@ -118,6 +118,21 @@ public abstract class AstVisitor<R, C>
     }
 
     protected R visitUse(Use node, C context)
+    {
+        return visitStatement(node, context);
+    }
+
+    protected R visitShowSession(ShowSession node, C context)
+    {
+        return visitStatement(node, context);
+    }
+
+    protected R visitSetSession(SetSession node, C context)
+    {
+        return visitStatement(node, context);
+    }
+
+    public R visitResetSession(ResetSession node, C context)
     {
         return visitStatement(node, context);
     }
@@ -257,7 +272,7 @@ public abstract class AstVisitor<R, C>
         return visitLiteral(node, context);
     }
 
-    protected R visitNegativeExpression(NegativeExpression node, C context)
+    protected R visitArithmeticUnary(ArithmeticUnaryExpression node, C context)
     {
         return visitExpression(node, context);
     }

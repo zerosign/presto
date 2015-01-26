@@ -19,6 +19,7 @@ import com.facebook.presto.UnpartitionedPagePartitionFunction;
 import com.facebook.presto.execution.StateMachine.StateChangeListener;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.spi.NodeManager;
+import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.split.SplitManager;
 import com.facebook.presto.sql.analyzer.Analysis;
 import com.facebook.presto.sql.analyzer.Analyzer;
@@ -26,10 +27,10 @@ import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.analyzer.QueryExplainer;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.DistributedExecutionPlanner;
-import com.facebook.presto.sql.planner.DistributedLogicalPlanner;
 import com.facebook.presto.sql.planner.InputExtractor;
 import com.facebook.presto.sql.planner.LogicalPlanner;
 import com.facebook.presto.sql.planner.Plan;
+import com.facebook.presto.sql.planner.PlanFragmenter;
 import com.facebook.presto.sql.planner.PlanNodeIdAllocator;
 import com.facebook.presto.sql.planner.StageExecutionPlan;
 import com.facebook.presto.sql.planner.SubPlan;
@@ -51,6 +52,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static com.facebook.presto.OutputBuffers.INITIAL_EMPTY_OUTPUT_BUFFERS;
 import static com.facebook.presto.SystemSessionProperties.isBigQueryEnabled;
+import static com.facebook.presto.spi.StandardErrorCode.USER_CANCELED;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 
@@ -133,7 +135,7 @@ public class SqlQueryExecution
             checkNotNull(self, "self is null");
             this.stateMachine = new QueryStateMachine(queryId, query, session, self, queryExecutor);
 
-            this.queryExplainer = new QueryExplainer(session, planOptimizers, metadata, sqlParser, experimentalSyntaxEnabled, distributedIndexJoinsEnabled, distributedJoinsEnabled);
+            this.queryExplainer = new QueryExplainer(session, planOptimizers, metadata, sqlParser, experimentalSyntaxEnabled);
         }
     }
 
@@ -167,7 +169,7 @@ public class SqlQueryExecution
                     stage.start();
                 }
                 else {
-                    stage.cancel(true);
+                    stage.abort();
                 }
             }
             catch (Throwable e) {
@@ -213,7 +215,7 @@ public class SqlQueryExecution
         stateMachine.setInputs(inputs);
 
         // fragment the plan
-        SubPlan subplan = new DistributedLogicalPlanner(session, metadata, idAllocator).createSubPlans(plan, false, distributedIndexJoinsEnabled, distributedJoinsEnabled);
+        SubPlan subplan = new PlanFragmenter().createSubPlans(plan);
 
         stateMachine.recordAnalysisTime(analysisStart);
         return subplan;
@@ -258,25 +260,6 @@ public class SqlQueryExecution
     }
 
     @Override
-    public void cancel()
-    {
-        try (SetThreadName setThreadName = new SetThreadName("Query-%s", stateMachine.getQueryId())) {
-            stateMachine.cancel();
-            cancelOutputStage();
-        }
-    }
-
-    private void cancelOutputStage()
-    {
-        try (SetThreadName setThreadName = new SetThreadName("Query-%s", stateMachine.getQueryId())) {
-            SqlStageExecution stageExecution = outputStage.get();
-            if (stageExecution != null) {
-                stageExecution.cancel(true);
-            }
-        }
-    }
-
-    @Override
     public void cancelStage(StageId stageId)
     {
         Preconditions.checkNotNull(stageId, "stageId is null");
@@ -295,7 +278,11 @@ public class SqlQueryExecution
         try (SetThreadName setThreadName = new SetThreadName("Query-%s", stateMachine.getQueryId())) {
             // transition to failed state, only if not already finished
             stateMachine.fail(cause);
-            cancelOutputStage();
+
+            SqlStageExecution stageExecution = outputStage.get();
+            if (stageExecution != null) {
+                stageExecution.abort();
+            }
         }
     }
 
@@ -337,11 +324,11 @@ public class SqlQueryExecution
         // if output stage is done, transition to done
         StageState outputStageState = outputStageInfo.getState();
         if (outputStageState.isDone()) {
-            if (outputStageState == StageState.FAILED) {
+            if (outputStageState.isFailure()) {
                 stateMachine.fail(failureCause(outputStageInfo));
             }
             else if (outputStageState == StageState.CANCELED) {
-                stateMachine.cancel();
+                stateMachine.fail(new PrestoException(USER_CANCELED, "Query was canceled"));
             }
             else {
                 stateMachine.finished();

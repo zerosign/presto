@@ -23,9 +23,9 @@ import com.facebook.presto.metadata.ColumnHandle;
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.metadata.Split;
 import com.facebook.presto.metadata.TableHandle;
-import com.facebook.presto.operator.RecordSinkManager;
 import com.facebook.presto.operator.index.IndexJoinLookupStats;
 import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.split.PageSinkManager;
 import com.facebook.presto.split.PageSourceManager;
 import com.facebook.presto.sql.gen.ExpressionCompiler;
 import com.facebook.presto.sql.parser.SqlParser;
@@ -73,6 +73,7 @@ public final class TaskTestUtils
                     null,
                     Optional.empty()),
             ImmutableMap.<Symbol, Type>of(SYMBOL, VARCHAR),
+            ImmutableList.of(SYMBOL),
             PlanDistribution.SOURCE,
             TABLE_SCAN_NODE_ID,
             OutputPartitioning.NONE,
@@ -90,7 +91,7 @@ public final class TaskTestUtils
                 new SqlParser(),
                 pageSourceManager,
                 new IndexManager(),
-                new RecordSinkManager(),
+                new PageSinkManager(),
                 new MockExchangeClientSupplier(),
                 new ExpressionCompiler(metadata),
                 new IndexJoinLookupStats(),

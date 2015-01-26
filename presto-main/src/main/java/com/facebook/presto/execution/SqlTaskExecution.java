@@ -144,7 +144,7 @@ public class SqlTaskExecution
         try (SetThreadName ignored = new SetThreadName("Task-%s", taskId)) {
             List<DriverFactory> driverFactories;
             try {
-                LocalExecutionPlan localExecutionPlan = planner.plan(taskContext.getSession(), fragment.getRoot(), fragment.getSymbols(), new TaskOutputFactory(sharedBuffer));
+                LocalExecutionPlan localExecutionPlan = planner.plan(taskContext.getSession(), fragment.getRoot(), fragment.getOutputLayout(), fragment.getSymbols(), new TaskOutputFactory(sharedBuffer));
                 driverFactories = localExecutionPlan.getDriverFactories();
             }
             catch (Throwable e) {
@@ -194,7 +194,9 @@ public class SqlTaskExecution
         // start unpartitioned drivers
         List<DriverSplitRunner> runners = new ArrayList<>();
         for (DriverSplitRunnerFactory driverFactory : unpartitionedDriverFactories) {
-            runners.add(driverFactory.createDriverRunner(null, false));
+            for (int i = 0; i < driverFactory.getDriverInstances(); i++) {
+                runners.add(driverFactory.createDriverRunner(null, false));
+            }
             driverFactory.setNoMoreSplits();
         }
         enqueueDrivers(true, runners);
@@ -403,6 +405,7 @@ public class SqlTaskExecution
 
     public void cancel()
     {
+        // todo this should finish all input sources and let the task finish naturally
         try (SetThreadName ignored = new SetThreadName("Task-%s", taskId)) {
             taskStateMachine.cancel();
         }
@@ -488,6 +491,11 @@ public class SqlTaskExecution
             if (isNoMoreSplits() && pendingCreation.get() <= 0) {
                 driverFactory.close();
             }
+        }
+
+        public int getDriverInstances()
+        {
+            return driverFactory.getDriverInstances();
         }
     }
 

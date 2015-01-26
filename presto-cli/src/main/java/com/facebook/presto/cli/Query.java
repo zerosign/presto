@@ -35,6 +35,8 @@ import java.io.OutputStreamWriter;
 import java.io.PrintStream;
 import java.io.Writer;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static com.facebook.presto.cli.ConsolePrinter.REAL_TERMINAL;
@@ -55,6 +57,16 @@ public class Query
     public Query(StatementClient client)
     {
         this.client = checkNotNull(client, "client is null");
+    }
+
+    public Map<String, String> getSetSessionProperties()
+    {
+        return client.getSetSessionProperties();
+    }
+
+    public Set<String> getResetSessionProperties()
+    {
+        return client.getResetSessionProperties();
     }
 
     public void renderOutput(PrintStream out, OutputFormat outputFormat, boolean interactive)

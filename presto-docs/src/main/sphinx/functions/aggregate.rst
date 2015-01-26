@@ -21,6 +21,14 @@ General Aggregate Functions
 
     Returns the average (arithmetic mean) of all input values.
 
+.. function:: bool_and(boolean) -> boolean
+
+    Returns ``TRUE`` if every input value is ``TRUE``, otherwise ``FALSE``.
+
+.. function:: bool_or(boolean) -> boolean
+
+    Returns ``TRUE`` if any input value is ``TRUE``, otherwise ``FALSE``.
+
 .. function:: count(*) -> bigint
 
     Returns the number of input rows.
@@ -33,6 +41,10 @@ General Aggregate Functions
 
     Returns the number of ``TRUE`` input values.
     This function is equivalent to ``count(CASE WHEN x THEN 1 END)``.
+
+.. function:: every(boolean) -> boolean
+
+    This is an alias for :func:`bool_and`.
 
 .. function:: max_by(x, y) -> [same as x]
 
@@ -53,6 +65,13 @@ General Aggregate Functions
 .. function:: sum(x) -> [same as input]
 
     Returns the sum of all input values.
+
+Map Aggregate Functions
+-----------------------
+
+.. function:: map_agg(key, value) -> map<K,V>
+
+    Returns a map created from the input ``key`` / ``value`` pairs.
 
 Approximate Aggregate Functions
 -------------------------------
@@ -78,7 +97,7 @@ Approximate Aggregate Functions
     is the standard deviation of the (approximately normal) error distribution
     over all possible sets. It does not guarantee an upper bound on the error
     for any specific input set. The current implementation of this function
-    requires that ``e`` be in the range: [0.01149, 0.26000].
+    requires that ``e`` be in the range: [0.01150, 0.26000].
 
 .. function:: approx_percentile(x, p) -> [same as input]
 

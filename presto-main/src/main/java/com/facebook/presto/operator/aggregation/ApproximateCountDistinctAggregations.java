@@ -23,10 +23,11 @@ import com.google.common.collect.ImmutableList;
 import io.airlift.slice.Slice;
 import io.airlift.stats.cardinality.HyperLogLog;
 
+import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
-import static com.google.common.base.Preconditions.checkArgument;
+import static com.facebook.presto.util.Failures.checkCondition;
 
 @AggregationFunction("approx_distinct")
 public final class ApproximateCountDistinctAggregations
@@ -35,6 +36,8 @@ public final class ApproximateCountDistinctAggregations
     public static final InternalAggregationFunction DOUBLE_APPROXIMATE_COUNT_DISTINCT_AGGREGATIONS = new AggregationCompiler().generateAggregationFunction(ApproximateCountDistinctAggregations.class, BIGINT, ImmutableList.<Type>of(DOUBLE, DOUBLE));
     public static final InternalAggregationFunction VARBINARY_APPROXIMATE_COUNT_DISTINCT_AGGREGATIONS = new AggregationCompiler().generateAggregationFunction(ApproximateCountDistinctAggregations.class, BIGINT, ImmutableList.<Type>of(VARCHAR, DOUBLE));
     private static final double DEFAULT_STANDARD_ERROR = 0.023;
+    private static final double LOWEST_MAX_STANDARD_ERROR = 0.01150;
+    private static final double HIGHEST_MAX_STANDARD_ERROR = 0.26000;
 
     private ApproximateCountDistinctAggregations() {}
 
@@ -94,7 +97,9 @@ public final class ApproximateCountDistinctAggregations
     @VisibleForTesting
     static int standardErrorToBuckets(double maxStandardError)
     {
-        checkArgument(maxStandardError > 0.0, "Max standard error must be greater than zero");
+        checkCondition(maxStandardError >= LOWEST_MAX_STANDARD_ERROR && maxStandardError <= HIGHEST_MAX_STANDARD_ERROR,
+                INVALID_FUNCTION_ARGUMENT,
+                "Max standard error must be in [%s, %s]: %s", LOWEST_MAX_STANDARD_ERROR, HIGHEST_MAX_STANDARD_ERROR, maxStandardError);
         return log2Ceiling((int) Math.ceil(1.0816 / (maxStandardError * maxStandardError)));
     }
 

@@ -38,15 +38,17 @@ import com.facebook.presto.sql.tree.Query;
 import com.facebook.presto.sql.tree.QuerySpecification;
 import com.facebook.presto.sql.tree.Relation;
 import com.facebook.presto.sql.tree.RenameTable;
-import com.facebook.presto.sql.tree.Row;
+import com.facebook.presto.sql.tree.ResetSession;
 import com.facebook.presto.sql.tree.SampledRelation;
 import com.facebook.presto.sql.tree.Select;
 import com.facebook.presto.sql.tree.SelectItem;
+import com.facebook.presto.sql.tree.SetSession;
 import com.facebook.presto.sql.tree.ShowCatalogs;
 import com.facebook.presto.sql.tree.ShowColumns;
 import com.facebook.presto.sql.tree.ShowFunctions;
 import com.facebook.presto.sql.tree.ShowPartitions;
 import com.facebook.presto.sql.tree.ShowSchemas;
+import com.facebook.presto.sql.tree.ShowSession;
 import com.facebook.presto.sql.tree.ShowTables;
 import com.facebook.presto.sql.tree.SingleColumn;
 import com.facebook.presto.sql.tree.Table;
@@ -347,24 +349,14 @@ public final class SqlFormatter
             builder.append(" VALUES ");
 
             boolean first = true;
-            for (Row row : node.getRows()) {
+            for (Expression row : node.getRows()) {
                 builder.append("\n")
                         .append(indentString(indent))
                         .append(first ? "  " : ", ");
 
-                process(row, indent + 1);
+                builder.append(formatExpression(row));
                 first = false;
             }
-
-            return null;
-        }
-
-        @Override
-        protected Void visitRow(Row node, Integer indent)
-        {
-            builder.append('(')
-                    .append(Joiner.on(", ").join(transform(node.getItems(), ExpressionFormatter::formatExpression)))
-                    .append(')');
 
             return null;
         }
@@ -518,15 +510,13 @@ public final class SqlFormatter
         {
             builder.append("SHOW TABLES");
 
-            if (node.getSchema() != null) {
-                builder.append(" FROM ")
-                        .append(node.getSchema());
-            }
+            node.getSchema().ifPresent((value) ->
+                    builder.append(" FROM ")
+                            .append(value));
 
-            if (node.getLikePattern() != null) {
-                builder.append(" LIKE ")
-                        .append(formatStringLiteral(node.getLikePattern()));
-            }
+            node.getLikePattern().ifPresent((value) ->
+                    builder.append(" LIKE ")
+                            .append(formatStringLiteral(value)));
 
             return null;
         }
@@ -573,6 +563,14 @@ public final class SqlFormatter
         }
 
         @Override
+        protected Void visitShowSession(ShowSession node, Integer context)
+        {
+            builder.append("SHOW SESSION");
+
+            return null;
+        }
+
+        @Override
         protected Void visitCreateTable(CreateTable node, Integer indent)
         {
             builder.append("CREATE TABLE ")
@@ -612,6 +610,26 @@ public final class SqlFormatter
                     .append(" ");
 
             process(node.getQuery(), indent);
+
+            return null;
+        }
+
+        @Override
+        public Void visitSetSession(SetSession node, Integer context)
+        {
+            builder.append("SET SESSION ")
+                    .append(node.getName())
+                    .append(" = ")
+                    .append(formatStringLiteral(node.getValue()));
+
+            return null;
+        }
+
+        @Override
+        public Void visitResetSession(ResetSession node, Integer context)
+        {
+            builder.append("RESET SESSION ")
+                    .append(node.getName());
 
             return null;
         }

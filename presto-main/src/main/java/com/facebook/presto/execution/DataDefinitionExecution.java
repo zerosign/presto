@@ -64,7 +64,7 @@ public class DataDefinitionExecution<T extends Statement>
 
             stateMachine.recordExecutionStart();
 
-            task.execute(statement, session, metadata);
+            task.execute(statement, session, metadata, stateMachine);
 
             stateMachine.finished();
         }
@@ -84,12 +84,6 @@ public class DataDefinitionExecution<T extends Statement>
     public void addStateChangeListener(StateChangeListener<QueryState> stateChangeListener)
     {
         stateMachine.addStateChangeListener(stateChangeListener);
-    }
-
-    @Override
-    public void cancel()
-    {
-        stateMachine.cancel();
     }
 
     @Override

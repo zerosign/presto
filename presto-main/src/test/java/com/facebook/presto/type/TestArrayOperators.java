@@ -23,14 +23,21 @@ import com.facebook.presto.sql.analyzer.SemanticErrorCode;
 import com.facebook.presto.sql.analyzer.SemanticException;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
+import com.google.common.primitives.Longs;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
+import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static com.facebook.presto.type.ArrayType.rawSlicesToStackRepresentation;
 import static com.facebook.presto.type.ArrayType.toStackRepresentation;
+import static java.lang.Double.NEGATIVE_INFINITY;
+import static java.lang.Double.NaN;
+import static java.lang.Double.POSITIVE_INFINITY;
+import static java.util.Arrays.asList;
+import static java.util.Collections.singletonList;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
@@ -49,6 +56,22 @@ public class TestArrayOperators
     private void assertFunction(String projection, Object expected)
     {
         functionAssertions.assertFunction(projection, expected);
+    }
+
+    private void assertInvalidFunction(String projection, String message)
+    {
+        try {
+            assertFunction(projection, null);
+        }
+        catch (PrestoException e) {
+            assertEquals(e.getErrorCode(), INVALID_FUNCTION_ARGUMENT.toErrorCode());
+            assertEquals(e.getMessage(), message);
+        }
+    }
+
+    private void assertInvalidFunction(String projection)
+    {
+        functionAssertions.assertInvalidFunction(projection);
     }
 
     @Test
@@ -73,6 +96,24 @@ public class TestArrayOperators
     }
 
     @Test
+    public void testJsonToArray()
+            throws Exception
+    {
+        assertFunction("CAST(CAST('[1, 2, 3]' AS JSON) AS ARRAY<BIGINT>)", ImmutableList.of(1L, 2L, 3L));
+        assertFunction("CAST(CAST('[1, null, 3]' AS JSON) AS ARRAY<BIGINT>)", asList(1L, null, 3L));
+        assertFunction("CAST(CAST('[1, 2.0, 3]' AS JSON) AS ARRAY<DOUBLE>)", ImmutableList.of(1.0, 2.0, 3.0));
+        assertFunction("CAST(CAST('[1.0, 2.5, 3.0]' AS JSON) AS ARRAY<DOUBLE>)", ImmutableList.of(1.0, 2.5, 3.0));
+        assertFunction("CAST(CAST('[\"puppies\", \"kittens\"]' AS JSON) AS ARRAY<VARCHAR>)", ImmutableList.of("puppies", "kittens"));
+        assertFunction("CAST(CAST('[true, false]' AS JSON) AS ARRAY<BOOLEAN>)", ImmutableList.of(true, false));
+        assertFunction("CAST(CAST('[[1], [null]]' AS JSON) AS ARRAY<ARRAY<BIGINT>>)", asList(asList(1L), asList((Long) null)));
+        assertFunction("CAST(CAST('null' AS JSON) AS ARRAY<BIGINT>)", null);
+        assertInvalidFunction("CAST(CAST('[1, null, 3]' AS JSON) AS ARRAY<TIMESTAMP>)");
+        assertInvalidFunction("CAST(CAST('[1, null, 3]' AS JSON) AS ARRAY<ARRAY<TIMESTAMP>>)");
+        assertInvalidFunction("CAST(CAST('[1, 2, 3]' AS JSON) AS ARRAY<BOOLEAN>)");
+        assertInvalidFunction("CAST(CAST('[\"puppies\", \"kittens\"]' AS JSON) AS ARRAY<BIGINT>)");
+    }
+
+    @Test
     public void testConstructor()
             throws Exception
     {
@@ -90,9 +131,9 @@ public class TestArrayOperators
         assertFunction("ARRAY [from_unixtime(1), from_unixtime(100)]", ImmutableList.of(
                 new SqlTimestamp(1000, TEST_SESSION.getTimeZoneKey()),
                 new SqlTimestamp(100_000, TEST_SESSION.getTimeZoneKey())));
-        assertFunction("ARRAY [sqrt(-1)]", ImmutableList.of(Double.NaN));
-        assertFunction("ARRAY [pow(infinity(), 2)]", ImmutableList.of(Double.POSITIVE_INFINITY));
-        assertFunction("ARRAY [pow(-infinity(), 1)]", ImmutableList.of(Double.NEGATIVE_INFINITY));
+        assertFunction("ARRAY [sqrt(-1)]", ImmutableList.of(NaN));
+        assertFunction("ARRAY [pow(infinity(), 2)]", ImmutableList.of(POSITIVE_INFINITY));
+        assertFunction("ARRAY [pow(-infinity(), 1)]", ImmutableList.of(NEGATIVE_INFINITY));
     }
 
     @Test
@@ -108,7 +149,7 @@ public class TestArrayOperators
         assertFunction("ARRAY [from_unixtime(1)] || ARRAY[from_unixtime(100)]", ImmutableList.of(
                 new SqlTimestamp(1000, TEST_SESSION.getTimeZoneKey()),
                 new SqlTimestamp(100_000, TEST_SESSION.getTimeZoneKey())));
-        assertFunction("ARRAY [ARRAY[ARRAY[1]]] || ARRAY [ARRAY[ARRAY[2]]]", ImmutableList.of(ImmutableList.of(ImmutableList.of(1L)), ImmutableList.of(ImmutableList.of(2L))));
+        assertFunction("ARRAY [ARRAY[ARRAY[1]]] || ARRAY [ARRAY[ARRAY[2]]]", asList(singletonList(Longs.asList(1)), singletonList(Longs.asList(2))));
         assertFunction("ARRAY [] || ARRAY []", ImmutableList.of());
         assertFunction("ARRAY [TRUE] || ARRAY [FALSE] || ARRAY [TRUE]", ImmutableList.of(true, false, true));
         assertFunction("ARRAY [1] || ARRAY [2] || ARRAY [3] || ARRAY [4]", ImmutableList.of(1L, 2L, 3L, 4L));
@@ -186,27 +227,13 @@ public class TestArrayOperators
     public void testSubscript()
             throws Exception
     {
-        try {
-            assertFunction("ARRAY [1, 2, 3][0]", null);
-            fail("Access to array element zero should fail");
-        }
-        catch (PrestoException e) {
-            // Expected
-        }
-        try {
-            assertFunction("ARRAY [1, 2, 3][-1]", null);
-            fail("Access to negative array element should fail");
-        }
-        catch (RuntimeException e) {
-            // Expected
-        }
-        try {
-            assertFunction("ARRAY [1, 2, 3][4]", null);
-            fail("Access to out of bounds array element should fail");
-        }
-        catch (RuntimeException e) {
-            // Expected
-        }
+        String outOfBounds = "Index out of bounds";
+        assertInvalidFunction("ARRAY [][1]", outOfBounds);
+        assertInvalidFunction("ARRAY [null][-1]", outOfBounds);
+        assertInvalidFunction("ARRAY [1, 2, 3][0]", outOfBounds);
+        assertInvalidFunction("ARRAY [1, 2, 3][-1]", outOfBounds);
+        assertInvalidFunction("ARRAY [1, 2, 3][4]", outOfBounds);
+
         try {
             assertFunction("ARRAY [1, 2, 3][1.1]", null);
             fail("Access to array with double subscript should fail");
@@ -214,6 +241,9 @@ public class TestArrayOperators
         catch (SemanticException e) {
             assertTrue(e.getCode() == SemanticErrorCode.TYPE_MISMATCH);
         }
+
+        assertFunction("ARRAY[NULL][1]", null);
+        assertFunction("ARRAY[NULL, NULL, NULL][3]", null);
         assertFunction("1 + ARRAY [2, 1, 3][2]", 2);
         assertFunction("ARRAY [2, 1, 3][2]", 1);
         assertFunction("ARRAY [2, NULL, 3][2]", null);
@@ -225,6 +255,9 @@ public class TestArrayOperators
         assertFunction("ARRAY ['puppies', 'kittens', NULL][3]", null);
         assertFunction("ARRAY [TRUE, FALSE][2]", false);
         assertFunction("ARRAY [from_unixtime(1), from_unixtime(100)][1]", new SqlTimestamp(1000, TEST_SESSION.getTimeZoneKey()));
+        assertFunction("ARRAY [infinity()][1]", POSITIVE_INFINITY);
+        assertFunction("ARRAY [-infinity()][1]", NEGATIVE_INFINITY);
+        assertFunction("ARRAY [sqrt(-1)][1]", NaN);
     }
 
     @Test

@@ -38,6 +38,7 @@ import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Multimap;
+import com.google.common.collect.ObjectArrays;
 import com.google.common.collect.SetMultimap;
 import com.google.common.net.HttpHeaders;
 import com.google.common.net.MediaType;
@@ -73,12 +74,14 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static com.facebook.presto.spi.StandardErrorCode.REMOTE_TASK_ERROR;
 import static com.facebook.presto.spi.StandardErrorCode.TOO_MANY_REQUESTS_FAILED;
+import static com.facebook.presto.util.Failures.WORKER_NODE_ERROR;
 import static com.facebook.presto.util.Failures.toFailure;
 import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
 import static com.google.common.base.MoreObjects.toStringHelper;
@@ -392,6 +395,52 @@ public class HttpRemoteTask
     public synchronized void cancel()
     {
         try (SetThreadName ignored = new SetThreadName("HttpRemoteTask-%s", taskId)) {
+            if (getTaskInfo().getState().isDone()) {
+                return;
+            }
+
+            URI uri = getTaskInfo().getSelf();
+            if (uri == null) {
+                return;
+            }
+
+            // send cancel to task and ignore response
+            final long start = System.nanoTime();
+            final Request request = prepareDelete()
+                    .setUri(uriBuilderFrom(uri).addParameter("abort", "false").addParameter("summarize").build())
+                    .build();
+            Futures.addCallback(httpClient.executeAsync(request, createStatusResponseHandler()), new FutureCallback<StatusResponse>()
+            {
+                @Override
+                public void onSuccess(StatusResponse result)
+                {
+                    // assume any response is good enough
+                }
+
+                @Override
+                public void onFailure(Throwable t)
+                {
+                    if (t instanceof RejectedExecutionException) {
+                        // client has been shutdown
+                        return;
+                    }
+
+                    // reschedule
+                    if (Duration.nanosSince(start).compareTo(new Duration(2, TimeUnit.MINUTES)) < 0) {
+                        Futures.addCallback(httpClient.executeAsync(request, createStatusResponseHandler()), this, executor);
+                    }
+                    else {
+                        logError(t, "Unable to cancel task at %s", request.getUri());
+                    }
+                }
+            }, executor);
+        }
+    }
+
+    @Override
+    public synchronized void abort()
+    {
+        try (SetThreadName ignored = new SetThreadName("HttpRemoteTask-%s", taskId)) {
             // clear pending splits to free memory
             pendingSplits.clear();
 
@@ -404,48 +453,51 @@ public class HttpRemoteTask
 
             // mark task as canceled (if not already done)
             TaskInfo taskInfo = getTaskInfo();
+            URI uri = taskInfo.getSelf();
             updateTaskInfo(new TaskInfo(taskInfo.getTaskId(),
                     TaskInfo.MAX_VERSION,
-                    TaskState.CANCELED,
-                    taskInfo.getSelf(),
+                    TaskState.ABORTED,
+                    uri,
                     taskInfo.getLastHeartbeat(),
                     taskInfo.getOutputBuffers(),
                     taskInfo.getNoMoreSplits(),
                     taskInfo.getStats(),
                     ImmutableList.<ExecutionFailureInfo>of()));
 
-            // fire delete to task and ignore response
-            if (taskInfo.getSelf() != null) {
-                final long start = System.nanoTime();
-                final Request request = prepareDelete()
-                        .setUri(uriBuilderFrom(taskInfo.getSelf()).addParameter("summarize").build())
-                        .build();
-                Futures.addCallback(httpClient.executeAsync(request, createStatusResponseHandler()), new FutureCallback<StatusResponse>()
-                {
-                    @Override
-                    public void onSuccess(StatusResponse result)
-                    {
-                        // assume any response is good enough
-                    }
-
-                    @Override
-                    public void onFailure(Throwable t)
-                    {
-                        if (t instanceof RejectedExecutionException) {
-                            // client has been shutdown
-                            return;
-                        }
-
-                        // reschedule
-                        if (Duration.nanosSince(start).compareTo(new Duration(2, TimeUnit.MINUTES)) < 0) {
-                            Futures.addCallback(httpClient.executeAsync(request, createStatusResponseHandler()), this, executor);
-                        }
-                        else {
-                            log.error(t, "Unable to cancel task at %s", request.getUri());
-                        }
-                    }
-                }, executor);
+            if (uri == null) {
+                return;
             }
+
+            // send abort to task and ignore response
+            final long start = System.nanoTime();
+            final Request request = prepareDelete()
+                    .setUri(uriBuilderFrom(uri).addParameter("summarize").build())
+                    .build();
+            Futures.addCallback(httpClient.executeAsync(request, createStatusResponseHandler()), new FutureCallback<StatusResponse>()
+            {
+                @Override
+                public void onSuccess(StatusResponse result)
+                {
+                    // assume any response is good enough
+                }
+
+                @Override
+                public void onFailure(Throwable t)
+                {
+                    if (t instanceof RejectedExecutionException) {
+                        // client has been shutdown
+                        return;
+                    }
+
+                    // reschedule
+                    if (Duration.nanosSince(start).compareTo(new Duration(2, TimeUnit.MINUTES)) < 0) {
+                        Futures.addCallback(httpClient.executeAsync(request, createStatusResponseHandler()), this, executor);
+                    }
+                    else {
+                        logError(t, "Unable to abort task at %s", request.getUri());
+                    }
+                }
+            }, executor);
         }
     }
 
@@ -486,8 +538,8 @@ public class HttpRemoteTask
         }
 
         // log failure message
-        if (isSocketError(reason)) {
-            // don't print a stack for a socket error
+        if (isExpectedError(reason)) {
+            // don't print a stack for known errors
             log.warn("Error updating task %s: %s: %s", taskInfo.getTaskId(), reason.getMessage(), taskInfo.getSelf());
         }
         else {
@@ -505,15 +557,16 @@ public class HttpRemoteTask
         if (errorCount > maxConsecutiveErrorCount && timeSinceLastSuccess.compareTo(minErrorDuration) > 0) {
             // it is weird to mark the task failed locally and then cancel the remote task, but there is no way to tell a remote task that it is failed
             PrestoException exception = new PrestoException(TOO_MANY_REQUESTS_FAILED,
-                    format("Encountered too many errors talking to a worker node. The node may have crashed or be under too much load. This is probably a transient issue, so please retry your query in a few minutes (%s - %s failures, time since last success %s)",
-                    taskInfo.getSelf(),
-                    errorCount,
-                    timeSinceLastSuccess.convertToMostSuccinctTimeUnit()));
+                    format("%s (%s - %s failures, time since last success %s)",
+                            WORKER_NODE_ERROR,
+                            taskInfo.getSelf(),
+                            errorCount,
+                            timeSinceLastSuccess.convertTo(TimeUnit.SECONDS)));
             for (Throwable error : errorsSinceLastSuccess) {
                 exception.addSuppressed(error);
             }
             failTask(exception);
-            cancel();
+            abort();
         }
     }
 
@@ -724,7 +777,7 @@ public class HttpRemoteTask
                     callback.success(response.getValue());
                 }
                 else if (response.getStatusCode() == HttpStatus.SERVICE_UNAVAILABLE.code()) {
-                    callback.failed(new RuntimeException(format("Server at %s returned SERVICE_UNAVAILABLE", uri)));
+                    callback.failed(new ServiceUnavailableException(uri));
                 }
                 else {
                     // Something is broken in the server or the client, so fail the task immediately (includes 500 errors)
@@ -767,15 +820,37 @@ public class HttpRemoteTask
         void fatal(Throwable cause);
     }
 
-    private static boolean isSocketError(Throwable t)
+    private static void logError(Throwable t, String format, Object... args)
+    {
+        if (isExpectedError(t)) {
+            log.error(format + ": %s", ObjectArrays.concat(args, t));
+        }
+        else {
+            log.error(t, format, args);
+        }
+    }
+
+    private static boolean isExpectedError(Throwable t)
     {
         while (t != null) {
-            // in this case we consider an EOFException a socket error
-            if ((t instanceof SocketException) || (t instanceof SocketTimeoutException) || (t instanceof EOFException)) {
+            if ((t instanceof SocketException) ||
+                    (t instanceof SocketTimeoutException) ||
+                    (t instanceof EOFException) ||
+                    (t instanceof TimeoutException) ||
+                    (t instanceof ServiceUnavailableException)) {
                 return true;
             }
             t = t.getCause();
         }
         return false;
+    }
+
+    private static class ServiceUnavailableException
+            extends RuntimeException
+    {
+        public ServiceUnavailableException(URI uri)
+        {
+            super("Server returned SERVICE_UNAVAILABLE: " + uri);
+        }
     }
 }

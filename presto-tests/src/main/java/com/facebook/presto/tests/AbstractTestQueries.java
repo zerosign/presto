@@ -92,13 +92,21 @@ public abstract class AbstractTestQueries
     }
 
     @Test
+    public void testVarbinary()
+            throws Exception
+    {
+        assertQuery("SELECT LENGTH(x) FROM (SELECT from_base64('gw==') as x)", "SELECT 1");
+        assertQuery("SELECT LENGTH(from_base64('gw=='))", "SELECT 1");
+    }
+
+    @Test
     public void testRowFieldAccessor()
             throws Exception
     {
-        assertQuery("SELECT a.col0 FROM (VALUES (test_row(1, 2))) AS t (a)", "SELECT 1");
-        assertQuery("SELECT a.col0 FROM (VALUES (test_row(1.0, 2.0))) AS t (a)", "SELECT 1.0");
-        assertQuery("SELECT a.col0 FROM (VALUES (test_row(TRUE, FALSE))) AS t (a)", "SELECT TRUE");
-        assertQuery("SELECT a.col1 FROM (VALUES (test_row(1.0, 'kittens'))) AS t (a)", "SELECT 'kittens'");
+        assertQuery("SELECT a.col0 FROM (VALUES ROW (test_row(1, 2))) AS t (a)", "SELECT 1");
+        assertQuery("SELECT a.col0 FROM (VALUES ROW (test_row(1.0, 2.0))) AS t (a)", "SELECT 1.0");
+        assertQuery("SELECT a.col0 FROM (VALUES ROW (test_row(TRUE, FALSE))) AS t (a)", "SELECT TRUE");
+        assertQuery("SELECT a.col1 FROM (VALUES ROW (test_row(1.0, 'kittens'))) AS t (a)", "SELECT 'kittens'");
     }
 
     @Test
@@ -146,9 +154,17 @@ public abstract class AbstractTestQueries
     }
 
     @Test
+    public void testMaps()
+            throws Exception
+    {
+        assertQuery("SELECT m[max_key] FROM (SELECT map_agg(orderkey, orderkey) m, max(orderkey) max_key FROM orders)", "SELECT max(orderkey) FROM orders");
+    }
+
+    @Test
     public void testValues()
             throws Exception
     {
+        assertQuery("VALUES 1, 2, 3, 4");
         assertQuery("VALUES (1.1, 2, 'foo'), (sin(3.3), 2+2, 'bar')");
         assertQuery("VALUES (1.1, 2), (sin(3.3), 2+2) ORDER BY 1", "VALUES (sin(3.3), 2+2), (1.1, 2)");
         assertQuery("VALUES (1.1, 2), (sin(3.3), 2+2) LIMIT 1", "VALUES (1.1, 2)");
@@ -566,6 +582,15 @@ public abstract class AbstractTestQueries
     }
 
     @Test
+    public void testRepeatedOutputs2()
+            throws Exception
+    {
+        // this test exposed a bug that wasn't caught by other tests that resulted in the execution engine
+        // trying to read orderkey as the second field, causing a type mismatch
+        assertQuery("SELECT orderdate, orderdate, orderkey FROM orders");
+    }
+
+    @Test
     public void testLimit()
             throws Exception
     {
@@ -942,6 +967,12 @@ public abstract class AbstractTestQueries
         assertQuery("SELECT orderstatus FROM orders GROUP BY orderstatus");
     }
 
+    @Test
+    public void testNestedGroupByWithSameKey()
+            throws Exception
+    {
+        assertQuery("SELECT custkey, sum(t) FROM (SELECT custkey, count(*) t FROM orders GROUP BY custkey) GROUP BY custkey");
+    }
     @Test
     public void testGroupByWithNulls()
             throws Exception
@@ -1787,6 +1818,13 @@ public abstract class AbstractTestQueries
         assertQuery("SELECT custkey, sum(totalprice) * 2 FROM orders GROUP BY custkey");
         assertQuery("SELECT custkey, avg(totalprice + 5) FROM orders GROUP BY custkey");
         assertQuery("SELECT custkey, sum(totalprice) * 2 FROM orders GROUP BY custkey HAVING avg(totalprice + 5) > 10");
+    }
+
+    @Test
+    public void testHavingWithoutGroupBy()
+            throws Exception
+    {
+        assertQuery("SELECT sum(orderkey) FROM orders HAVING sum(orderkey) > 400000");
     }
 
     @Test
@@ -2741,6 +2779,19 @@ public abstract class AbstractTestQueries
     }
 
     @Test
+    public void testShowSession()
+            throws Exception
+    {
+        assertQueryOrdered(
+                getSession()
+                        .withCatalogProperty("connector", "cheese", "burger")
+                        .withSystemProperty("foo", "bar")
+                        .withSystemProperty("apple", "pie"),
+                "SHOW SESSION",
+                "SELECT * FROM VALUES ('apple', 'pie'), ('foo', 'bar'), ('connector.cheese', 'burger')");
+    }
+
+    @Test
     public void testNoFrom()
             throws Exception
     {
@@ -2782,6 +2833,9 @@ public abstract class AbstractTestQueries
     {
         assertQuery("SELECT orderkey FROM orders UNION SELECT custkey FROM orders");
         assertQuery("SELECT 123 UNION DISTINCT SELECT 123 UNION ALL SELECT 123");
+
+        // mixed single-node vs fixed vs source-distributed
+        assertQuery("SELECT orderkey FROM orders UNION ALL SELECT 123 UNION ALL (SELECT custkey FROM orders GROUP BY custkey)");
     }
 
     @Test

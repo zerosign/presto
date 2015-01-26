@@ -23,7 +23,6 @@ import com.facebook.presto.sql.tree.FrameBound;
 import com.facebook.presto.sql.tree.WindowFrame;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
-import com.google.common.util.concurrent.ListenableFuture;
 import it.unimi.dsi.fastutil.ints.IntComparator;
 
 import java.util.Collections;
@@ -219,7 +218,7 @@ public class WindowOperator
 
         this.types = toTypes(sourceTypes, outputChannels, windowFunctions);
 
-        this.pagesIndex = new PagesIndex(sourceTypes, expectedPositions, operatorContext);
+        this.pagesIndex = new PagesIndex(sourceTypes, expectedPositions);
         this.pageBuilder = new PageBuilder(this.types);
     }
 
@@ -267,12 +266,6 @@ public class WindowOperator
     }
 
     @Override
-    public ListenableFuture<?> isBlocked()
-    {
-        return NOT_BLOCKED;
-    }
-
-    @Override
     public boolean needsInput()
     {
         return state == State.NEEDS_INPUT;
@@ -285,6 +278,7 @@ public class WindowOperator
         checkNotNull(page, "page is null");
 
         pagesIndex.addPage(page);
+        operatorContext.setMemoryReservation(pagesIndex.getEstimatedSize().toBytes());
     }
 
     @Override

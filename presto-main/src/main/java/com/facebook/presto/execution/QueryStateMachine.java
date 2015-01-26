@@ -18,7 +18,6 @@ import com.facebook.presto.Session;
 import com.facebook.presto.client.FailureInfo;
 import com.facebook.presto.execution.StateMachine.StateChangeListener;
 import com.facebook.presto.spi.ErrorCode;
-import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Predicates;
@@ -36,15 +35,16 @@ import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.net.URI;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Executor;
 
-import static com.facebook.presto.execution.QueryState.CANCELED;
 import static com.facebook.presto.execution.QueryState.FAILED;
 import static com.facebook.presto.execution.QueryState.FINISHED;
 import static com.facebook.presto.execution.StageInfo.getAllStages;
-import static com.facebook.presto.spi.StandardErrorCode.USER_CANCELED;
 import static com.facebook.presto.util.Failures.toFailure;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static io.airlift.units.DataSize.Unit.BYTE;
@@ -82,6 +82,12 @@ public class QueryStateMachine
     private Duration totalPlanningTime;
 
     private final StateMachine<QueryState> queryState;
+
+    @GuardedBy("this")
+    private final Map<String, String> setSessionProperties = new LinkedHashMap<>();
+
+    @GuardedBy("this")
+    private final Set<String> resetSessionProperties = new LinkedHashSet<>();
 
     @GuardedBy("this")
     private Throwable failureCause;
@@ -244,6 +250,8 @@ public class QueryStateMachine
                 outputFieldNames,
                 query,
                 queryStats,
+                setSessionProperties,
+                resetSessionProperties,
                 rootStage,
                 failureInfo,
                 errorCode,
@@ -260,6 +268,26 @@ public class QueryStateMachine
     {
         checkNotNull(inputs, "inputs is null");
         this.inputs = ImmutableSet.copyOf(inputs);
+    }
+
+    public synchronized Map<String, String> getSetSessionProperties()
+    {
+        return setSessionProperties;
+    }
+
+    public synchronized void addSetSessionProperties(String key, String value)
+    {
+        setSessionProperties.put(checkNotNull(key, "key is null"), checkNotNull(value, "value is null"));
+    }
+
+    public synchronized Set<String> getResetSessionProperties()
+    {
+        return resetSessionProperties;
+    }
+
+    public synchronized void addResetSessionProperties(String name)
+    {
+        resetSessionProperties.add(checkNotNull(name, "name is null"));
     }
 
     public synchronized QueryState getQueryState()
@@ -311,21 +339,6 @@ public class QueryStateMachine
             }
         }
         return queryState.setIf(FINISHED, Predicates.not(QueryState::isDone));
-    }
-
-    public boolean cancel()
-    {
-        synchronized (this) {
-            if (endTime == null) {
-                endTime = DateTime.now();
-            }
-        }
-        synchronized (this) {
-            if (failureCause == null) {
-                failureCause = new PrestoException(USER_CANCELED, "Query was canceled");
-            }
-        }
-        return queryState.setIf(CANCELED, Predicates.not(QueryState::isDone));
     }
 
     public boolean fail(@Nullable Throwable cause)

@@ -18,6 +18,7 @@ import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
+import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonParseException;
@@ -119,15 +120,7 @@ public final class TypeJsonUtils
             type.writeLong(blockBuilder, parser.getLongValue());
         }
         else if (type.getJavaType() == double.class) {
-            double value;
-            try {
-                value = parser.getDoubleValue();
-            }
-            catch (JsonParseException e) {
-                //handle non-numeric numbers (inf/nan)
-                value = Double.parseDouble(parser.getValueAsString());
-            }
-            type.writeDouble(blockBuilder, value);
+            type.writeDouble(blockBuilder, getDoubleValue(parser));
         }
         else if (type.getJavaType() == Slice.class) {
             type.writeSlice(blockBuilder, Slices.utf8Slice(parser.getValueAsString()));
@@ -187,5 +180,59 @@ public final class TypeJsonUtils
             throw new PrestoException(INVALID_FUNCTION_ARGUMENT, format("Unexpected type %s", javaType.getName()));
         }
         return blockBuilder.build();
+    }
+
+    public static Object getValue(Block input, Type type, int position)
+    {
+        if (input.isNull(position)) {
+            return null;
+        }
+
+        if (type.getJavaType() == long.class) {
+            return type.getLong(input, position);
+        }
+        else if (type.getJavaType() == double.class) {
+            return type.getDouble(input, position);
+        }
+        else if (type.getJavaType() == Slice.class) {
+            return type.getObjectValue(null, input, position);
+        }
+        else if (type.getJavaType() == boolean.class) {
+            return type.getBoolean(input, position);
+        }
+        else {
+            throw new IllegalArgumentException("Unsupported type: " + type.getJavaType().getSimpleName());
+        }
+    }
+
+    public static double getDoubleValue(JsonParser parser) throws IOException
+    {
+        double value;
+        try {
+            value = parser.getDoubleValue();
+        }
+        catch (JsonParseException e) {
+            //handle non-numeric numbers (inf/nan)
+            value = Double.parseDouble(parser.getValueAsString());
+        }
+        return value;
+    }
+
+    public static boolean canCastFromJson(Type type)
+    {
+        String baseType = type.getTypeSignature().getBase();
+        if (baseType.equals(StandardTypes.BOOLEAN) ||
+                baseType.equals(StandardTypes.BIGINT) ||
+                baseType.equals(StandardTypes.DOUBLE) ||
+                baseType.equals(StandardTypes.VARCHAR)) {
+            return true;
+        }
+        if (type instanceof ArrayType) {
+            return canCastFromJson(((ArrayType) type).getElementType());
+        }
+        if (type instanceof MapType) {
+            return canCastFromJson(((MapType) type).getKeyType()) && canCastFromJson(((MapType) type).getValueType());
+        }
+        return false;
     }
 }

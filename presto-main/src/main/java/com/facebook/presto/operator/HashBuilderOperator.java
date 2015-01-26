@@ -17,7 +17,6 @@ import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
-import com.google.common.util.concurrent.ListenableFuture;
 
 import javax.annotation.concurrent.ThreadSafe;
 
@@ -114,7 +113,7 @@ public class HashBuilderOperator
         this.hashChannels = ImmutableList.copyOf(checkNotNull(hashChannels, "hashChannels is null"));
         this.hashChannel = checkNotNull(hashChannel, "hashChannel is null");
 
-        this.pagesIndex = new PagesIndex(lookupSourceSupplier.getTypes(), expectedPositions, operatorContext);
+        this.pagesIndex = new PagesIndex(lookupSourceSupplier.getTypes(), expectedPositions);
     }
 
     @Override
@@ -136,7 +135,7 @@ public class HashBuilderOperator
             return;
         }
 
-        LookupSource lookupSource = pagesIndex.createLookupSource(hashChannels, hashChannel);
+        LookupSource lookupSource = pagesIndex.createLookupSource(hashChannels, operatorContext, hashChannel);
         lookupSourceSupplier.setLookupSource(lookupSource);
         finished = true;
     }
@@ -145,12 +144,6 @@ public class HashBuilderOperator
     public boolean isFinished()
     {
         return finished;
-    }
-
-    @Override
-    public ListenableFuture<?> isBlocked()
-    {
-        return NOT_BLOCKED;
     }
 
     @Override
@@ -166,6 +159,7 @@ public class HashBuilderOperator
         checkState(!isFinished(), "Operator is already finished");
 
         pagesIndex.addPage(page);
+        operatorContext.setMemoryReservation(pagesIndex.getEstimatedSize().toBytes());
         operatorContext.recordGeneratedOutput(page.getSizeInBytes(), page.getPositionCount());
     }
 

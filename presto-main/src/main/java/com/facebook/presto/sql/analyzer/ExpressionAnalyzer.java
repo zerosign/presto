@@ -24,7 +24,8 @@ import com.facebook.presto.spi.type.TypeSignature;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.DependencyExtractor;
 import com.facebook.presto.sql.planner.Symbol;
-import com.facebook.presto.sql.tree.ArithmeticExpression;
+import com.facebook.presto.sql.tree.ArithmeticBinaryExpression;
+import com.facebook.presto.sql.tree.ArithmeticUnaryExpression;
 import com.facebook.presto.sql.tree.ArrayConstructor;
 import com.facebook.presto.sql.tree.AstVisitor;
 import com.facebook.presto.sql.tree.BetweenPredicate;
@@ -48,13 +49,13 @@ import com.facebook.presto.sql.tree.IsNullPredicate;
 import com.facebook.presto.sql.tree.LikePredicate;
 import com.facebook.presto.sql.tree.LogicalBinaryExpression;
 import com.facebook.presto.sql.tree.LongLiteral;
-import com.facebook.presto.sql.tree.NegativeExpression;
 import com.facebook.presto.sql.tree.Node;
 import com.facebook.presto.sql.tree.NotExpression;
 import com.facebook.presto.sql.tree.NullIfExpression;
 import com.facebook.presto.sql.tree.NullLiteral;
 import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.sql.tree.QualifiedNameReference;
+import com.facebook.presto.sql.tree.Row;
 import com.facebook.presto.sql.tree.SearchedCaseExpression;
 import com.facebook.presto.sql.tree.SimpleCaseExpression;
 import com.facebook.presto.sql.tree.SortItem;
@@ -72,7 +73,6 @@ import com.google.common.collect.Iterables;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -112,6 +112,7 @@ import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
 import static com.facebook.presto.util.Types.checkType;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.collect.Sets.newIdentityHashSet;
 
 public class ExpressionAnalyzer
 {
@@ -125,7 +126,7 @@ public class ExpressionAnalyzer
     private final IdentityHashMap<Expression, Type> expressionTypes = new IdentityHashMap<>();
     private final IdentityHashMap<Expression, Type> expressionCoercions = new IdentityHashMap<>();
     private final IdentityHashMap<Expression, Boolean> rowFieldAccessors = new IdentityHashMap<>();
-    private final Set<InPredicate> subqueryInPredicates = Collections.newSetFromMap(new IdentityHashMap<InPredicate, Boolean>());
+    private final Set<InPredicate> subqueryInPredicates = newIdentityHashSet();
 
     public ExpressionAnalyzer(Analysis analysis, Session session, Metadata metadata, SqlParser sqlParser, boolean experimentalSyntaxEnabled)
     {
@@ -199,6 +200,19 @@ public class ExpressionAnalyzer
         }
 
         @Override
+        protected Type visitRow(Row node, AnalysisContext context)
+        {
+            List<Type> types = node.getItems().stream()
+                    .map((child) -> process(child, context))
+                    .collect(toImmutableList());
+
+            Type type = new RowType(types, Optional.empty());
+            expressionTypes.put(node, type);
+
+            return type;
+        }
+
+        @Override
         protected Type visitCurrentTime(CurrentTime node, AnalysisContext context)
         {
             if (node.getPrecision() != null) {
@@ -269,7 +283,7 @@ public class ExpressionAnalyzer
                 RowType rowType = checkType(field.getType(), RowType.class, "field.getType()");
                 Type rowFieldType = null;
                 for (RowField rowField : rowType.getFields()) {
-                    if (rowField.getName().equals(node.getName().getSuffix())) {
+                    if (rowField.getName().equals(Optional.of(node.getName().getSuffix()))) {
                         rowFieldType = rowField.getType();
                         break;
                     }
@@ -415,15 +429,13 @@ public class ExpressionAnalyzer
             return type;
         }
 
-        private List<Expression> getCaseResultExpressions(List<WhenClause> whenClauses, Expression defaultValue)
+        private List<Expression> getCaseResultExpressions(List<WhenClause> whenClauses, Optional<Expression> defaultValue)
         {
             List<Expression> resultExpressions = new ArrayList<>();
             for (WhenClause whenClause : whenClauses) {
                 resultExpressions.add(whenClause.getResult());
             }
-            if (defaultValue != null) {
-                resultExpressions.add(defaultValue);
-            }
+            defaultValue.ifPresent(resultExpressions::add);
             return resultExpressions;
         }
 
@@ -437,13 +449,28 @@ public class ExpressionAnalyzer
         }
 
         @Override
-        protected Type visitNegativeExpression(NegativeExpression node, AnalysisContext context)
+        protected Type visitArithmeticUnary(ArithmeticUnaryExpression node, AnalysisContext context)
         {
-            return getOperator(context, node, OperatorType.NEGATION, node.getValue());
+            switch (node.getSign()) {
+                case PLUS:
+                    Type type = process(node.getValue(), context);
+
+                    if (!type.equals(BIGINT) && !type.equals(DOUBLE)) {
+                        // TODO: figure out a type-agnostic way of dealing with this. Maybe add a special unary operator
+                        // that types can chose to implement, or piggyback on the existence of the negation operator
+                        throw new SemanticException(TYPE_MISMATCH, node, "Unary '+' operator cannot by applied to %s type", type);
+                    }
+                    expressionTypes.put(node, type);
+                    break;
+                case MINUS:
+                    return getOperator(context, node, OperatorType.NEGATION, node.getValue());
+            }
+
+            throw new UnsupportedOperationException("Unsupported unary operator: " + node.getSign());
         }
 
         @Override
-        protected Type visitArithmeticExpression(ArithmeticExpression node, AnalysisContext context)
+        protected Type visitArithmeticBinary(ArithmeticBinaryExpression node, AnalysisContext context)
         {
             return getOperator(context, node, OperatorType.valueOf(node.getType().name()), node.getLeft(), node.getRight());
         }
@@ -673,6 +700,10 @@ public class ExpressionAnalyzer
             Type type = metadata.getType(parseTypeSignature(node.getType()));
             if (type == null) {
                 throw new SemanticException(TYPE_MISMATCH, node, "Unknown type: " + node.getType());
+            }
+
+            if (type == UNKNOWN) {
+                throw new SemanticException(TYPE_MISMATCH, node, "UNKNOWN is not a valid type");
             }
 
             Type value = process(node.getExpression(), context);

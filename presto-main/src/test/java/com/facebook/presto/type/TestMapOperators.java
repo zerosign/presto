@@ -14,6 +14,7 @@
 package com.facebook.presto.type;
 
 import com.facebook.presto.operator.scalar.FunctionAssertions;
+import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.type.SqlTimestamp;
 import com.facebook.presto.spi.type.SqlVarbinary;
 import com.google.common.collect.ImmutableList;
@@ -28,6 +29,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
+import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static com.facebook.presto.type.MapType.rawValueSlicesToStackRepresentation;
 import static org.testng.Assert.assertEquals;
 
@@ -44,6 +46,22 @@ public class TestMapOperators
     private void assertFunction(String projection, Object expected)
     {
         functionAssertions.assertFunction(projection, expected);
+    }
+
+    private void assertInvalidFunction(String projection, String message)
+    {
+        try {
+            assertFunction(projection, null);
+        }
+        catch (PrestoException e) {
+            assertEquals(e.getErrorCode(), INVALID_FUNCTION_ARGUMENT.toErrorCode());
+            assertEquals(e.getMessage(), message);
+        }
+    }
+
+    private void assertInvalidFunction(String projection)
+    {
+        functionAssertions.assertInvalidFunction(projection);
     }
 
     @Test
@@ -78,6 +96,8 @@ public class TestMapOperators
                 1.0,
                 new SqlTimestamp(100_000, TEST_SESSION.getTimeZoneKey()),
                 100.0));
+
+        assertInvalidFunction("MAP(ARRAY [1], ARRAY [2, 4])", "Key and value arrays must be the same length");
     }
 
     @Test
@@ -107,6 +127,19 @@ public class TestMapOperators
         assertFunction("CAST(MAP(ARRAY[TRUE], ARRAY[2]) AS JSON)", "{\"true\":2}");
         assertFunction("CAST(MAP(ARRAY['1'], ARRAY[from_unixtime(1)]) AS JSON)", "{\"1\":\"" + new SqlTimestamp(1000, TEST_SESSION.getTimeZoneKey()).toString() + "\"}");
         assertFunction("CAST(MAP(ARRAY[from_unixtime(1)], ARRAY[1.0]) AS JSON)", "{\"" + new SqlTimestamp(1000, TEST_SESSION.getTimeZoneKey()).toString() + "\":1.0}");
+    }
+
+    @Test
+    public void testJsonToMap()
+            throws Exception
+    {
+        assertFunction("CAST(CAST('{\"1\":2, \"3\": 4}' AS JSON) AS MAP<BIGINT, BIGINT>)", ImmutableMap.of(1L, 2L, 3L, 4L));
+        assertFunction("CAST(CAST('{\"1\":2.0, \"3\": 4.0}' AS JSON) AS MAP<BIGINT, DOUBLE>)", ImmutableMap.of(1L, 2.0, 3L, 4.0));
+        assertFunction("CAST(CAST('{\"1\":[2, 3], \"4\": [5]}' AS JSON) AS MAP<BIGINT, ARRAY<BIGINT>>)", ImmutableMap.of(1L, ImmutableList.of(2L, 3L), 4L, ImmutableList.of(5L)));
+        assertFunction("CAST(CAST('{\"puppies\":\"kittens\"}' AS JSON) AS MAP<VARCHAR, VARCHAR>)", ImmutableMap.of("puppies", "kittens"));
+        assertFunction("CAST(CAST('{\"true\":\"kittens\"}' AS JSON) AS MAP<BOOLEAN, VARCHAR>)", ImmutableMap.of(true, "kittens"));
+        assertFunction("CAST(CAST('null' AS JSON) AS MAP<BOOLEAN, VARCHAR>)", null);
+        assertInvalidFunction("CAST(CAST('{\"true\":\"kittens\"}' AS JSON) AS MAP<BOOLEAN, VARBINARY>)");
     }
 
     @Test

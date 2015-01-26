@@ -42,6 +42,7 @@ import static com.facebook.presto.type.DateTimeOperators.modulo24Hour;
 import static com.facebook.presto.util.DateTimeZoneIndex.extractZoneOffsetMinutes;
 import static com.facebook.presto.util.DateTimeZoneIndex.getChronology;
 import static com.facebook.presto.util.DateTimeZoneIndex.unpackChronology;
+import static com.facebook.presto.util.Failures.checkCondition;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Locale.ENGLISH;
 import static java.util.concurrent.TimeUnit.DAYS;
@@ -65,6 +66,7 @@ public final class DateTimeFunctions
     private static final DateTimeField DAY_OF_MONTH = UTC_CHRONOLOGY.dayOfMonth();
     private static final DateTimeField DAY_OF_YEAR = UTC_CHRONOLOGY.dayOfYear();
     private static final DateTimeField WEEK_OF_YEAR = UTC_CHRONOLOGY.weekOfWeekyear();
+    private static final DateTimeField YEAR_OF_WEEK = UTC_CHRONOLOGY.weekyear();
     private static final DateTimeField MONTH_OF_YEAR = UTC_CHRONOLOGY.monthOfYear();
     private static final DateTimeField QUARTER = QUARTER_OF_YEAR.getField(UTC_CHRONOLOGY);
     private static final DateTimeField YEAR = UTC_CHRONOLOGY.year();
@@ -168,10 +170,7 @@ public final class DateTimeFunctions
     @SqlType(StandardTypes.TIME_WITH_TIME_ZONE)
     public static long timeAtTimeZone(@SqlType(StandardTypes.TIME_WITH_TIME_ZONE) long timeWithTimeZone, @SqlType(StandardTypes.INTERVAL_DAY_TO_SECOND) long zoneOffset)
     {
-        if (zoneOffset % 60_000 != 0) {
-            throw new IllegalArgumentException("Invalid time zone offset interval: interval contains seconds");
-        }
-
+        checkCondition((zoneOffset % 60_000) == 0, INVALID_FUNCTION_ARGUMENT, "Invalid time zone offset interval: interval contains seconds");
         int zoneOffsetMinutes = (int) (zoneOffset / 60_000);
         return packDateTimeWithZone(unpackMillisUtc(timeWithTimeZone), getTimeZoneKeyForOffset(zoneOffsetMinutes));
     }
@@ -187,10 +186,7 @@ public final class DateTimeFunctions
     @SqlType(StandardTypes.TIMESTAMP_WITH_TIME_ZONE)
     public static long timestampAtTimeZone(@SqlType(StandardTypes.TIMESTAMP_WITH_TIME_ZONE) long timestampWithTimeZone, @SqlType(StandardTypes.INTERVAL_DAY_TO_SECOND) long zoneOffset)
     {
-        if (zoneOffset % 60_000 != 0) {
-            throw new IllegalArgumentException("Invalid time zone offset interval: interval contains seconds");
-        }
-
+        checkCondition((zoneOffset % 60_000) == 0, INVALID_FUNCTION_ARGUMENT, "Invalid time zone offset interval: interval contains seconds");
         int zoneOffsetMinutes = (int) (zoneOffset / 60_000);
         return packDateTimeWithZone(unpackMillisUtc(timestampWithTimeZone), getTimeZoneKeyForOffset(zoneOffsetMinutes));
     }
@@ -358,9 +354,8 @@ public final class DateTimeFunctions
                 return QUARTER_OF_YEAR.getField(chronology);
             case "year":
                 return chronology.year();
-            default:
-                throw new IllegalArgumentException("'" + unitString + "' is not a valid DATE field");
         }
+        throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "'" + unitString + "' is not a valid DATE field");
     }
 
     private static DateTimeField getTimeField(ISOChronology chronology, Slice unit)
@@ -373,9 +368,8 @@ public final class DateTimeFunctions
                 return chronology.minuteOfHour();
             case "hour":
                 return chronology.hourOfDay();
-            default:
-                throw new IllegalArgumentException("'" + unitString + "' is not a valid Time field");
         }
+        throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "'" + unitString + "' is not a valid Time field");
     }
 
     private static DateTimeField getTimestampField(ISOChronology chronology, Slice unit)
@@ -398,9 +392,8 @@ public final class DateTimeFunctions
                 return QUARTER_OF_YEAR.getField(chronology);
             case "year":
                 return chronology.year();
-            default:
-                throw new IllegalArgumentException("'" + unitString + "' is not a valid Timestamp field");
         }
+        throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "'" + unitString + "' is not a valid Timestamp field");
     }
 
     @Description("parses the specified date/time by the given format")
@@ -726,6 +719,30 @@ public final class DateTimeFunctions
     public static long weekFromDate(@SqlType(StandardTypes.DATE) long date)
     {
         return WEEK_OF_YEAR.get(DAYS.toMillis(date));
+    }
+
+    @Description("year of the ISO week of the given timestamp")
+    @ScalarFunction(value = "year_of_week", alias = "yow")
+    @SqlType(StandardTypes.BIGINT)
+    public static long yearOfWeekFromTimestamp(ConnectorSession session, @SqlType(StandardTypes.TIMESTAMP) long timestamp)
+    {
+        return getChronology(session.getTimeZoneKey()).weekyear().get(timestamp);
+    }
+
+    @Description("year of the ISO week of the given timestamp")
+    @ScalarFunction(value = "year_of_week", alias = "yow")
+    @SqlType(StandardTypes.BIGINT)
+    public static long yearOfWeekFromTimestampWithTimeZone(@SqlType(StandardTypes.TIMESTAMP_WITH_TIME_ZONE) long timestampWithTimeZone)
+    {
+        return unpackChronology(timestampWithTimeZone).weekyear().get(unpackMillisUtc(timestampWithTimeZone));
+    }
+
+    @Description("year of the ISO week of the given date")
+    @ScalarFunction(value = "year_of_week", alias = "yow")
+    @SqlType(StandardTypes.BIGINT)
+    public static long yearOfWeekFromDate(@SqlType(StandardTypes.DATE) long date)
+    {
+        return YEAR_OF_WEEK.get(DAYS.toMillis(date));
     }
 
     @Description("month of the year of the given timestamp")
