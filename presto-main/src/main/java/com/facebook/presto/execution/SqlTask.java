@@ -100,9 +100,12 @@ public class SqlTask
                 }
 
                 // make sure buffers are cleaned up
-                if (taskState != TaskState.FAILED && taskState != TaskState.ABORTED) {
+                if (taskState == TaskState.FAILED || taskState == TaskState.ABORTED) {
                     // don't close buffers for a failed query
                     // closed buffers signal to upstream tasks that everything finished cleanly
+                    sharedBuffer.fail();
+                }
+                else {
                     sharedBuffer.destroy();
                 }
 
@@ -162,7 +165,9 @@ public class SqlTask
                 noMoreSplits = taskExecution.getNoMoreSplits();
             }
             else {
-                taskStats = new TaskStats(taskStateMachine.getCreatedTime());
+                // if the task completed without creation, set end time
+                DateTime endTime = state.isDone() ? DateTime.now() : null;
+                taskStats = new TaskStats(taskStateMachine.getCreatedTime(), endTime);
                 noMoreSplits = ImmutableSet.of();
             }
         }
