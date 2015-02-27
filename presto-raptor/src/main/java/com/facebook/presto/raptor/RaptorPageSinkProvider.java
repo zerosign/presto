@@ -13,13 +13,14 @@
  */
 package com.facebook.presto.raptor;
 
+import com.facebook.presto.raptor.metadata.ShardInfo;
 import com.facebook.presto.raptor.storage.StorageManager;
-import com.facebook.presto.raptor.util.CurrentNodeId;
 import com.facebook.presto.spi.ConnectorInsertTableHandle;
 import com.facebook.presto.spi.ConnectorOutputTableHandle;
 import com.facebook.presto.spi.ConnectorPageSink;
 import com.facebook.presto.spi.ConnectorPageSinkProvider;
 import com.facebook.presto.spi.PageSorter;
+import io.airlift.json.JsonCodec;
 
 import javax.inject.Inject;
 
@@ -34,15 +35,15 @@ public class RaptorPageSinkProvider
         implements ConnectorPageSinkProvider
 {
     private final StorageManager storageManager;
-    private final String nodeId;
     private final PageSorter pageSorter;
+    private final JsonCodec<ShardInfo> shardInfoCodec;
 
     @Inject
-    public RaptorPageSinkProvider(StorageManager storageManager, CurrentNodeId currentNodeId, PageSorter pageSorter)
+    public RaptorPageSinkProvider(StorageManager storageManager, PageSorter pageSorter, JsonCodec<ShardInfo> shardInfoCodec)
     {
         this.storageManager = checkNotNull(storageManager, "storageManager is null");
-        this.nodeId = checkNotNull(currentNodeId, "currentNodeId is null").toString();
         this.pageSorter = checkNotNull(pageSorter, "pageSorter is null");
+        this.shardInfoCodec = checkNotNull(shardInfoCodec, "shardInfoCodec is null");
     }
 
     @Override
@@ -50,9 +51,9 @@ public class RaptorPageSinkProvider
     {
         RaptorOutputTableHandle handle = checkType(tableHandle, RaptorOutputTableHandle.class, "tableHandle");
         return new RaptorPageSink(
-                nodeId,
                 pageSorter,
                 storageManager,
+                shardInfoCodec,
                 toColumnIds(handle.getColumnHandles()),
                 handle.getColumnTypes(),
                 optionalColumnId(handle.getSampleWeightColumnHandle()),
@@ -65,9 +66,9 @@ public class RaptorPageSinkProvider
     {
         RaptorInsertTableHandle handle = checkType(tableHandle, RaptorInsertTableHandle.class, "tableHandle");
         return new RaptorPageSink(
-                nodeId,
                 pageSorter,
                 storageManager,
+                shardInfoCodec,
                 toColumnIds(handle.getColumnHandles()),
                 handle.getColumnTypes(),
                 Optional.empty(),

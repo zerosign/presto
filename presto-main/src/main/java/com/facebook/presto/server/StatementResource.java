@@ -260,6 +260,8 @@ public class StatementResource
         public void close()
         {
             queryManager.cancelQuery(queryId);
+            // frees buffers in the client
+            exchangeClient.close();
         }
 
         public QueryId getQueryId()
@@ -337,7 +339,7 @@ public class StatementResource
                     exchangeClient.close();
 
                     // Return a single value for clients that require a result.
-                    columns = ImmutableList.of(new Column("result", "boolean", new ClientTypeSignature(StandardTypes.BOOLEAN, ImmutableList.<ClientTypeSignature>of(), ImmutableList.<Object>of())));
+                    columns = ImmutableList.of(new Column("result", "boolean", new ClientTypeSignature(StandardTypes.BOOLEAN, ImmutableList.<ClientTypeSignature>of(), ImmutableList.of())));
                     data = ImmutableSet.<List<Object>>of(ImmutableList.<Object>of(true));
                 }
             }
@@ -366,7 +368,7 @@ public class StatementResource
                     updateCount);
 
             // cache the last results
-            if (lastResult != null) {
+            if (lastResult != null && lastResult.getNextUri() != null) {
                 lastResultPath = lastResult.getNextUri().getPath();
             }
             else {

@@ -13,14 +13,15 @@
  */
 package com.facebook.presto.raptor.storage;
 
-import com.facebook.presto.RowPagesBuilder;
 import com.facebook.presto.metadata.InMemoryNodeManager;
 import com.facebook.presto.orc.LongVector;
 import com.facebook.presto.orc.OrcDataSource;
 import com.facebook.presto.orc.OrcRecordReader;
 import com.facebook.presto.orc.SliceVector;
 import com.facebook.presto.raptor.RaptorColumnHandle;
+import com.facebook.presto.raptor.metadata.ColumnStats;
 import com.facebook.presto.raptor.metadata.DatabaseShardManager;
+import com.facebook.presto.raptor.metadata.ShardInfo;
 import com.facebook.presto.raptor.metadata.ShardManager;
 import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.ConnectorSession;
@@ -28,6 +29,7 @@ import com.facebook.presto.spi.NodeManager;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.TupleDomain;
 import com.facebook.presto.spi.type.SqlDate;
+import com.facebook.presto.spi.type.SqlTimestamp;
 import com.facebook.presto.spi.type.SqlVarbinary;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.testing.MaterializedResult;
@@ -52,6 +54,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
+import static com.facebook.presto.RowPagesBuilder.rowPagesBuilder;
 import static com.facebook.presto.raptor.storage.OrcTestingUtil.createReader;
 import static com.facebook.presto.raptor.storage.OrcTestingUtil.octets;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
@@ -59,6 +62,7 @@ import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.DateType.DATE;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
+import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
 import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.testing.MaterializedResult.materializeSourceDataStream;
@@ -68,11 +72,14 @@ import static io.airlift.slice.Slices.utf8Slice;
 import static io.airlift.slice.Slices.wrappedBuffer;
 import static io.airlift.testing.FileUtils.deleteRecursively;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
+import static java.lang.String.format;
 import static java.util.Locale.ENGLISH;
 import static org.joda.time.DateTimeZone.UTC;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertNotEquals;
 import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.fail;
 import static org.testng.FileAssert.assertFile;
 
 @Test(singleThreaded = true)
@@ -81,10 +88,11 @@ public class TestOrcStorageManager
     private static final ISOChronology UTC_CHRONOLOGY = ISOChronology.getInstance(UTC);
     private static final DateTime EPOCH = new DateTime(0, UTC_CHRONOLOGY);
     private static final ConnectorSession SESSION = new ConnectorSession("user", UTC_KEY, ENGLISH, System.currentTimeMillis(), null);
-    private static final DataSize ORC_MERGE_DISTANCE = new DataSize(1, MEGABYTE);
+    private static final String CURRENT_NODE = "node";
+    private static final DataSize ORC_MAX_MERGE_DISTANCE = new DataSize(1, MEGABYTE);
     private static final Duration SHARD_RECOVERY_TIMEOUT = new Duration(30, TimeUnit.SECONDS);
     private static final DataSize MAX_BUFFER_SIZE = new DataSize(256, MEGABYTE);
-    public static final int ROWS_PER_SHARD = 100;
+    private static final int ROWS_PER_SHARD = 100;
 
     private final NodeManager nodeManager = new InMemoryNodeManager();
     private Handle dummyHandle;
@@ -141,23 +149,28 @@ public class TestOrcStorageManager
     public void testWriter()
             throws Exception
     {
-        OrcStorageManager manager = new OrcStorageManager(storageService, ORC_MERGE_DISTANCE, recoveryManager, SHARD_RECOVERY_TIMEOUT, ROWS_PER_SHARD, MAX_BUFFER_SIZE);
+        OrcStorageManager manager = createOrcStorageManager(storageService, recoveryManager);
 
         List<Long> columnIds = ImmutableList.of(3L, 7L);
         List<Type> columnTypes = ImmutableList.<Type>of(BIGINT, VARCHAR);
 
         StoragePageSink sink = manager.createStoragePageSink(columnIds, columnTypes);
-        List<Page> pages = RowPagesBuilder.rowPagesBuilder(columnTypes)
+        List<Page> pages = rowPagesBuilder(columnTypes)
                 .row(123, "hello")
                 .row(456, "bye")
                 .build();
         sink.appendPages(pages);
-        List<UUID> uuids = sink.commit();
+        List<ShardInfo> shards = sink.commit();
 
-        assertEquals(uuids.size(), 1);
-        UUID shardUuid = Iterables.getOnlyElement(uuids);
+        assertEquals(shards.size(), 1);
+        ShardInfo shardInfo = Iterables.getOnlyElement(shards);
+
+        UUID shardUuid = shardInfo.getShardUuid();
         File file = storageService.getStorageFile(shardUuid);
         File backupFile = storageService.getBackupFile(shardUuid);
+
+        assertEquals(shardInfo.getRowCount(), 2);
+        assertEquals(shardInfo.getDataSize(), file.length());
 
         // verify primary and backup shard exist
         assertFile(file, "primary shard");
@@ -195,7 +208,7 @@ public class TestOrcStorageManager
     public void testReader()
             throws Exception
     {
-        OrcStorageManager manager = new OrcStorageManager(storageService, ORC_MERGE_DISTANCE, recoveryManager, SHARD_RECOVERY_TIMEOUT, ROWS_PER_SHARD, MAX_BUFFER_SIZE);
+        OrcStorageManager manager = createOrcStorageManager(storageService, recoveryManager);
 
         List<Long> columnIds = ImmutableList.of(2L, 4L, 6L, 7L, 8L, 9L);
         List<Type> columnTypes = ImmutableList.<Type>of(BIGINT, VARCHAR, VARBINARY, DATE, BOOLEAN, DOUBLE);
@@ -205,32 +218,34 @@ public class TestOrcStorageManager
 
         StoragePageSink sink = manager.createStoragePageSink(columnIds, columnTypes);
 
-        List<Page> pages = RowPagesBuilder.rowPagesBuilder(columnTypes)
-                .row(123, "hello", wrappedBuffer(bytes1), dateValue(new DateTime(2001, 8, 22, 0, 0, 0, 0, UTC)), true, 123.45)
+        Object[][] doubles = {
+                {881, "-inf", null, null, null, Double.NEGATIVE_INFINITY},
+                {882, "+inf", null, null, null, Double.POSITIVE_INFINITY},
+                {883, "nan", null, null, null, Double.NaN},
+                {884, "min", null, null, null, Double.MIN_VALUE},
+                {885, "max", null, null, null, Double.MAX_VALUE},
+                {886, "pzero", null, null, null, 0.0},
+                {887, "nzero", null, null, null, -0.0},
+        };
+
+        List<Page> pages = rowPagesBuilder(columnTypes)
+                .row(123, "hello", wrappedBuffer(bytes1), sqlDate(2001, 8, 22).getDays(), true, 123.45)
                 .row(null, null, null, null, null, null)
-                .row(456, "bye", wrappedBuffer(bytes3), dateValue(new DateTime(2005, 4, 22, 0, 0, 0, 0, UTC)), false, 987.65)
-                .row(881, "-inf", null, null, null, Double.NEGATIVE_INFINITY)
-                .row(882, "+inf", null, null, null, Double.POSITIVE_INFINITY)
-                .row(883, "nan", null, null, null, Double.NaN)
-                .row(884, "min", null, null, null, Double.MIN_VALUE)
-                .row(885, "max", null, null, null, Double.MAX_VALUE)
+                .row(456, "bye", wrappedBuffer(bytes3), sqlDate(2005, 4, 22).getDays(), false, 987.65)
+                .rows(doubles)
                 .build();
 
         sink.appendPages(pages);
-        List<UUID> uuids = sink.commit();
+        List<ShardInfo> shards = sink.commit();
 
-        assertEquals(uuids.size(), 1);
-        UUID uuid = Iterables.getOnlyElement(uuids);
+        assertEquals(shards.size(), 1);
+        UUID uuid = Iterables.getOnlyElement(shards).getShardUuid();
 
         MaterializedResult expected = resultBuilder(SESSION, columnTypes)
                 .row(123, "hello", sqlBinary(bytes1), sqlDate(2001, 8, 22), true, 123.45)
                 .row(null, null, null, null, null, null)
                 .row(456, "bye", sqlBinary(bytes3), sqlDate(2005, 4, 22), false, 987.65)
-                .row(881, "-inf", null, null, null, Double.NEGATIVE_INFINITY)
-                .row(882, "+inf", null, null, null, Double.POSITIVE_INFINITY)
-                .row(883, "nan", null, null, null, Double.NaN)
-                .row(884, "min", null, null, null, Double.MIN_VALUE)
-                .row(885, "max", null, null, null, Double.MAX_VALUE)
+                .rows(doubles)
                 .build();
 
         // no tuple domain (all)
@@ -263,6 +278,161 @@ public class TestOrcStorageManager
         }
     }
 
+    @Test
+    public void testShardStatsBigint()
+    {
+        List<ColumnStats> stats = columnStats(types(BIGINT),
+                row(2L),
+                row(-3L),
+                row(5L));
+        assertColumnStats(stats, 1, -3L, 5L);
+    }
+
+    @Test
+    public void testShardStatsDouble()
+    {
+        List<ColumnStats> stats = columnStats(types(DOUBLE),
+                row(2.5),
+                row(-4.1),
+                row(6.6));
+        assertColumnStats(stats, 1, -4.1, 6.6);
+    }
+
+    @Test
+    public void testShardStatsBigintDouble()
+    {
+        List<ColumnStats> stats = columnStats(types(BIGINT, DOUBLE),
+                row(-3L, 6.6),
+                row(5L, -4.1));
+        assertColumnStats(stats, 1, -3L, 5L);
+        assertColumnStats(stats, 2, -4.1, 6.6);
+    }
+
+    @Test
+    public void testShardStatsDoubleMinMax()
+    {
+        List<ColumnStats> stats = columnStats(types(DOUBLE),
+                row(3.2),
+                row(Double.MIN_VALUE),
+                row(4.5));
+        assertColumnStats(stats, 1, Double.MIN_VALUE, 4.5);
+
+        stats = columnStats(types(DOUBLE),
+                row(3.2),
+                row(Double.MAX_VALUE),
+                row(4.5));
+        assertColumnStats(stats, 1, 3.2, Double.MAX_VALUE);
+    }
+
+    @Test
+    public void testShardStatsDoubleNotFinite()
+    {
+        List<ColumnStats> stats = columnStats(types(DOUBLE),
+                row(3.2),
+                row(Double.NEGATIVE_INFINITY),
+                row(4.5));
+        assertColumnStats(stats, 1, null, 4.5);
+
+        stats = columnStats(types(DOUBLE),
+                row(3.2),
+                row(Double.POSITIVE_INFINITY),
+                row(4.5));
+        assertColumnStats(stats, 1, 3.2, null);
+
+        stats = columnStats(types(DOUBLE),
+                row(3.2),
+                row(Double.NaN),
+                row(4.5));
+        assertColumnStats(stats, 1, 3.2, 4.5);
+    }
+
+    @Test
+    public void testShardStatsVarchar()
+    {
+        List<ColumnStats> stats = columnStats(
+                types(VARCHAR),
+                row(utf8Slice("hello")),
+                row(utf8Slice("bye")),
+                row(utf8Slice("foo")));
+        assertColumnStats(stats, 1, "bye", "hello");
+    }
+
+    @Test
+    public void testShardStatsBigintVarbinary()
+    {
+        List<ColumnStats> stats = columnStats(types(BIGINT, VARBINARY),
+                row(5L, wrappedBuffer(octets(0x00))),
+                row(3L, wrappedBuffer(octets(0x01))));
+        assertColumnStats(stats, 1, 3L, 5L);
+        assertNoColumnStats(stats, 2);
+    }
+
+    @Test
+    public void testShardStatsDateTimestamp()
+    {
+        long minDate = sqlDate(2001, 8, 22).getDays();
+        long maxDate = sqlDate(2005, 4, 22).getDays();
+        long maxTimestamp = sqlTimestamp(2002, 4, 13, 6, 7, 8).getMillisUtc();
+        long minTimestamp = sqlTimestamp(2001, 3, 15, 9, 10, 11).getMillisUtc();
+
+        List<ColumnStats> stats = columnStats(types(DATE, TIMESTAMP),
+                row(minDate, maxTimestamp),
+                row(maxDate, minTimestamp));
+        assertColumnStats(stats, 1, minDate, maxDate);
+        assertColumnStats(stats, 2, minTimestamp, maxTimestamp);
+    }
+
+    public static OrcStorageManager createOrcStorageManager(StorageService storageService, ShardRecoveryManager recoveryManager)
+    {
+        return new OrcStorageManager(CURRENT_NODE, storageService, ORC_MAX_MERGE_DISTANCE, recoveryManager, SHARD_RECOVERY_TIMEOUT, ROWS_PER_SHARD, MAX_BUFFER_SIZE);
+    }
+
+    private static void assertColumnStats(List<ColumnStats> list, long columnId, Object min, Object max)
+    {
+        for (ColumnStats stats : list) {
+            if (stats.getColumnId() == columnId) {
+                assertEquals(stats.getMin(), min);
+                assertEquals(stats.getMax(), max);
+                return;
+            }
+        }
+        fail(format("no stats for column: %s: %s", columnId, list));
+    }
+
+    private static void assertNoColumnStats(List<ColumnStats> list, long columnId)
+    {
+        for (ColumnStats stats : list) {
+            assertNotEquals(stats.getColumnId(), columnId);
+        }
+    }
+
+    private static List<Type> types(Type... types)
+    {
+        return ImmutableList.copyOf(types);
+    }
+
+    private static Object[] row(Object... values)
+    {
+        return values;
+    }
+
+    private List<ColumnStats> columnStats(List<Type> columnTypes, Object[]... rows)
+    {
+        ImmutableList.Builder<Long> list = ImmutableList.builder();
+        for (long i = 1; i <= columnTypes.size(); i++) {
+            list.add(i);
+        }
+        List<Long> columnIds = list.build();
+
+        OrcStorageManager manager = createOrcStorageManager(storageService, recoveryManager);
+        StoragePageSink sink = manager.createStoragePageSink(columnIds, columnTypes);
+        sink.appendPages(rowPagesBuilder(columnTypes).rows(rows).build());
+        List<ShardInfo> shards = sink.commit();
+
+        assertEquals(shards.size(), 1);
+        return Iterables.getOnlyElement(shards).getColumnStats();
+    }
+
     private static SqlVarbinary sqlBinary(byte[] bytes)
     {
         return new SqlVarbinary(bytes);
@@ -270,11 +440,13 @@ public class TestOrcStorageManager
 
     private static SqlDate sqlDate(int year, int month, int day)
     {
-        return new SqlDate(dateValue(new DateTime(year, month, day, 0, 0, 0, 0, UTC)));
+        DateTime date = new DateTime(year, month, day, 0, 0, 0, 0, UTC);
+        return new SqlDate(Days.daysBetween(EPOCH, date).getDays());
     }
 
-    private static int dateValue(DateTime dateTime)
+    private static SqlTimestamp sqlTimestamp(int year, int month, int day, int hour, int minute, int second)
     {
-        return Days.daysBetween(EPOCH, new DateTime(dateTime, UTC_CHRONOLOGY)).getDays();
+        DateTime dateTime = new DateTime(year, month, day, hour, minute, second, 0, UTC);
+        return new SqlTimestamp(dateTime.getMillis(), UTC_KEY);
     }
 }

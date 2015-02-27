@@ -16,13 +16,12 @@ package com.facebook.presto.execution;
 import com.facebook.presto.Session;
 import com.facebook.presto.event.query.QueryMonitor;
 import com.facebook.presto.execution.QueryExecution.QueryExecutionFactory;
-import com.facebook.presto.execution.StateMachine.StateChangeListener;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.sql.parser.ParsingException;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.tree.Statement;
-import com.google.common.base.Preconditions;
 import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.MoreExecutors;
 import com.google.common.util.concurrent.SettableFuture;
 import io.airlift.concurrent.AsyncSemaphore;
 import io.airlift.concurrent.SetThreadName;
@@ -64,6 +63,7 @@ import static com.facebook.presto.spi.StandardErrorCode.USER_CANCELED;
 import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
 import static io.airlift.concurrent.Threads.threadsNamed;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 
@@ -192,8 +192,8 @@ public class SqlQueryManager
     public Duration waitForStateChange(QueryId queryId, QueryState currentState, Duration maxWait)
             throws InterruptedException
     {
-        Preconditions.checkNotNull(queryId, "queryId is null");
-        Preconditions.checkNotNull(maxWait, "maxWait is null");
+        checkNotNull(queryId, "queryId is null");
+        checkNotNull(maxWait, "maxWait is null");
 
         QueryExecution query = queries.get(queryId);
         if (query == null) {
@@ -222,7 +222,7 @@ public class SqlQueryManager
     public QueryInfo createQuery(Session session, String query)
     {
         checkNotNull(query, "query is null");
-        Preconditions.checkArgument(!query.isEmpty(), "query must not be empty string");
+        checkArgument(!query.isEmpty(), "query must not be empty string");
 
         QueryId queryId = queryIdGenerator.createNextQueryId();
 
@@ -231,26 +231,32 @@ public class SqlQueryManager
             statement = sqlParser.createStatement(query);
         }
         catch (ParsingException e) {
-            return createFailedQuery(session, query, queryId, e);
+            // This is intentionally not a method, since after the state change listener is registered
+            // it's not safe to do any of this, and we had bugs before where people reused this code in a method
+            URI self = locationFactory.createQueryLocation(queryId);
+            QueryExecution execution = new FailedQueryExecution(queryId, query, session, self, queryExecutor, e);
+
+            queries.put(queryId, execution);
+            queryMonitor.createdEvent(execution.getQueryInfo());
+            queryMonitor.completionEvent(execution.getQueryInfo());
+            stats.queryFinished(execution.getQueryInfo());
+            expirationQueue.add(execution);
+
+            return execution.getQueryInfo();
         }
 
         QueryExecutionFactory<?> queryExecutionFactory = executionFactories.get(statement.getClass());
-        Preconditions.checkState(queryExecutionFactory != null, "Unsupported statement type %s", statement.getClass().getName());
-        final QueryExecution queryExecution = queryExecutionFactory.createQueryExecution(queryId, query, session, statement);
+        checkState(queryExecutionFactory != null, "Unsupported statement type %s", statement.getClass().getName());
+        QueryExecution queryExecution = queryExecutionFactory.createQueryExecution(queryId, query, session, statement);
         queryMonitor.createdEvent(queryExecution.getQueryInfo());
 
-        queryExecution.addStateChangeListener(new StateChangeListener<QueryState>()
-        {
-            @Override
-            public void stateChanged(QueryState newValue)
-            {
-                if (newValue.isDone()) {
-                    QueryInfo info = queryExecution.getQueryInfo();
+        queryExecution.addStateChangeListener(newValue -> {
+            if (newValue.isDone()) {
+                QueryInfo info = queryExecution.getQueryInfo();
 
-                    stats.queryFinished(info);
-                    queryMonitor.completionEvent(info);
-                    expirationQueue.add(queryExecution);
-                }
+                stats.queryFinished(info);
+                queryMonitor.completionEvent(info);
+                expirationQueue.add(queryExecution);
             }
         });
 
@@ -258,7 +264,7 @@ public class SqlQueryManager
 
         // start the query in the background
         if (!queryStarter.submit(queryExecution)) {
-            return createFailedQuery(session, query, queryId, new PrestoException(QUERY_QUEUE_FULL, "Too many queued queries!"));
+            queryExecution.fail(new PrestoException(QUERY_QUEUE_FULL, "Too many queued queries!"));
         }
 
         return queryExecution.getQueryInfo();
@@ -280,7 +286,7 @@ public class SqlQueryManager
     @Override
     public void cancelStage(StageId stageId)
     {
-        Preconditions.checkNotNull(stageId, "stageId is null");
+        checkNotNull(stageId, "stageId is null");
 
         log.debug("Cancel stage %s", stageId);
 
@@ -373,21 +379,6 @@ public class SqlQueryManager
         return lastHeartbeat != null && lastHeartbeat.isBefore(oldestAllowedHeartbeat);
     }
 
-    private QueryInfo createFailedQuery(Session session, String query, QueryId queryId, Throwable cause)
-    {
-        URI self = locationFactory.createQueryLocation(queryId);
-        QueryExecution execution = new FailedQueryExecution(queryId, query, session, self, queryExecutor, cause);
-
-        queries.put(queryId, execution);
-        stats.queryStarted();
-        queryMonitor.createdEvent(execution.getQueryInfo());
-        queryMonitor.completionEvent(execution.getQueryInfo());
-        stats.queryFinished(execution.getQueryInfo());
-        expirationQueue.add(execution);
-
-        return execution.getQueryInfo();
-    }
-
     /**
      * Set up a callback to fire when a query is completed. The callback will be called at most once.
      */
@@ -470,6 +461,7 @@ public class SqlQueryManager
                                     queryExecutor.execute(() -> {
                                         try (SetThreadName setThreadName = new SetThreadName("Query-%s", queryExecution.getQueryInfo().getQueryId())) {
                                             stats.queryStarted();
+                                            settableFuture.addListener(stats::queryStopped, MoreExecutors.directExecutor());
                                             queryExecution.start();
                                         }
                                     });
