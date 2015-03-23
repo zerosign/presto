@@ -19,12 +19,14 @@ import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.TupleDomain;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableSet;
+import io.airlift.log.Logger;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.sql.Wrapper;
 import java.util.UUID;
 
 import static com.facebook.presto.raptor.RaptorErrorCode.RAPTOR_ERROR;
@@ -36,6 +38,8 @@ final class ShardIterator
         extends AbstractIterator<ShardNodes>
         implements CloseableIterator<ShardNodes>
 {
+    private static final Logger log = Logger.get(ShardIterator.class);
+
     private final Connection connection;
     private final PreparedStatement statement;
     private final ResultSet resultSet;
@@ -56,9 +60,12 @@ final class ShardIterator
                 "WHERE " + predicate.getPredicate() + "\n" +
                 "ORDER BY shard_uuid";
 
+        log.debug("Executing shard query:\n%s", sql);
+
         this.connection = checkNotNull(connection, "connection is null");
         try {
             statement = connection.prepareStatement(sql);
+            enableStreamingResults(statement);
             predicate.bind(statement);
             resultSet = statement.executeQuery();
         }
@@ -125,5 +132,23 @@ final class ShardIterator
             return new ShardNodes(currentShardId, nodes.build());
         }
         return endOfData();
+    }
+
+    private static void enableStreamingResults(Statement statement)
+            throws SQLException
+    {
+        if (isWrapperFor(statement, com.mysql.jdbc.Statement.class)) {
+            statement.unwrap(com.mysql.jdbc.Statement.class).enableStreamingResults();
+        }
+    }
+
+    private static boolean isWrapperFor(Wrapper wrapper, Class<?> clazz)
+    {
+        try {
+            return wrapper.isWrapperFor(clazz);
+        }
+        catch (SQLException ignored) {
+            return false;
+        }
     }
 }

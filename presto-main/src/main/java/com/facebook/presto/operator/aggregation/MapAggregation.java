@@ -29,7 +29,7 @@ import com.facebook.presto.type.MapType;
 import com.google.common.collect.ImmutableList;
 import io.airlift.slice.Slice;
 
-import java.lang.reflect.Method;
+import java.lang.invoke.MethodHandle;
 import java.util.List;
 import java.util.Map;
 
@@ -41,16 +41,16 @@ import static com.facebook.presto.operator.aggregation.AggregationMetadata.Param
 import static com.facebook.presto.operator.aggregation.AggregationMetadata.ParameterMetadata.ParameterType.NULLABLE_INPUT_CHANNEL;
 import static com.facebook.presto.operator.aggregation.AggregationMetadata.ParameterMetadata.ParameterType.STATE;
 import static com.facebook.presto.operator.aggregation.AggregationUtils.generateAggregationName;
-import static com.facebook.presto.util.Reflection.method;
+import static com.facebook.presto.util.Reflection.methodHandle;
 
 public class MapAggregation
         extends ParametricAggregation
 {
     public static final MapAggregation MAP_AGG = new MapAggregation();
     public static final String NAME = "map_agg";
-    private static final Method OUTPUT_FUNCTION = method(MapAggregation.class, "output", KeyValuePairsState.class, BlockBuilder.class);
-    private static final Method INPUT_FUNCTION = method(MapAggregation.class, "input", KeyValuePairsState.class, Block.class, Block.class, int.class);
-    private static final Method COMBINE_FUNCTION = method(MapAggregation.class, "combine", KeyValuePairsState.class, KeyValuePairsState.class);
+    private static final MethodHandle OUTPUT_FUNCTION = methodHandle(MapAggregation.class, "output", KeyValuePairsState.class, BlockBuilder.class);
+    private static final MethodHandle INPUT_FUNCTION = methodHandle(MapAggregation.class, "input", KeyValuePairsState.class, Block.class, Block.class, int.class);
+    private static final MethodHandle COMBINE_FUNCTION = methodHandle(MapAggregation.class, "combine", KeyValuePairsState.class, KeyValuePairsState.class);
 
     private static final Signature SIGNATURE = new Signature(NAME, ImmutableList.of(comparableTypeParameter("K"), typeParameter("V")),
                                                                    "map<K,V>", ImmutableList.of("K", "V"), false, false);
@@ -120,7 +120,7 @@ public class MapAggregation
         }
 
         long startSize = pairs.estimatedInMemorySize();
-        pairs.add(key, value, position);
+        pairs.add(key, value, position, position);
         state.addMemoryUsage(pairs.estimatedInMemorySize() - startSize);
     }
 
@@ -129,9 +129,12 @@ public class MapAggregation
         if (state.get() != null && otherState.get() != null) {
             Block keys = otherState.get().getKeys();
             Block values = otherState.get().getValues();
+            KeyValuePairs pairs = state.get();
+            long startSize = pairs.estimatedInMemorySize();
             for (int i = 0; i < keys.getPositionCount(); i++) {
-                state.get().add(keys, values, i);
+                pairs.add(keys, values, i, i);
             }
+            state.addMemoryUsage(pairs.estimatedInMemorySize() - startSize);
         }
         else if (state.get() == null) {
             state.set(otherState.get());

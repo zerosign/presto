@@ -49,6 +49,43 @@ public class TestConditions
         assertFunction("null like 'monkey'", null);
         assertFunction("'monkey' like null", null);
         assertFunction("'monkey' like 'monkey' escape null", null);
+
+        assertFunction("'_monkey_' not like 'X_monkeyX_' escape 'X'", false);
+
+        assertFunction("'monkey' not like 'monkey'", false);
+        assertFunction("'monkey' not like 'mon%'", false);
+        assertFunction("'monkey' not like 'mon_ey'", false);
+        assertFunction("'monkey' not like 'm____y'", false);
+
+        assertFunction("'monkey' not like 'dain'", true);
+        assertFunction("'monkey' not like 'key'", true);
+
+        assertFunction("'_monkey_' not like '\\_monkey\\_'", true);
+        assertFunction("'_monkey_' not like 'X_monkeyX_' escape 'X'", false);
+        assertFunction("'_monkey_' not like '_monkey_' escape ''", false);
+
+        assertFunction("'*?.(){}+|^$,\\' not like '*?.(){}+|^$,\\' escape ''", false);
+
+        assertFunction("null not like 'monkey'", null);
+        assertFunction("'monkey' not like null", null);
+        assertFunction("'monkey' not like 'monkey' escape null", null);
+    }
+
+    @Test
+    public void testDistinctFrom()
+            throws Exception
+    {
+        assertFunction("NULL IS DISTINCT FROM NULL", false);
+        assertFunction("NULL IS DISTINCT FROM 1", true);
+        assertFunction("1 IS DISTINCT FROM NULL", true);
+        assertFunction("1 IS DISTINCT FROM 1", false);
+        assertFunction("1 IS DISTINCT FROM 2", true);
+
+        assertFunction("NULL IS NOT DISTINCT FROM NULL", true);
+        assertFunction("NULL IS NOT DISTINCT FROM 1", false);
+        assertFunction("1 IS NOT DISTINCT FROM NULL", false);
+        assertFunction("1 IS NOT DISTINCT FROM 1", true);
+        assertFunction("1 IS NOT DISTINCT FROM 2", false);
     }
 
     @Test(expectedExceptions = RuntimeException.class, expectedExceptionsMessageRegExp = ".*escape must be empty or a single character.*")
@@ -81,6 +118,28 @@ public class TestConditions
         assertFunction("null between 'b' and 'd'", null);
         assertFunction("'c' between null and 'd'", null);
         assertFunction("'c' between 'b' and null", null);
+
+        assertFunction("3 not between 2 and 4", false);
+        assertFunction("3 not between 3 and 3", false);
+        assertFunction("3 not between 2 and 3", false);
+        assertFunction("3 not between 3 and 4", false);
+        assertFunction("3 not between 4 and 2", true);
+        assertFunction("2 not between 3 and 4", true);
+        assertFunction("5 not between 3 and 4", true);
+        assertFunction("null not between 2 and 4", null);
+        assertFunction("3 not between null and 4", null);
+        assertFunction("3 not between 2 and null", null);
+
+        assertFunction("'c' not between 'b' and 'd'", false);
+        assertFunction("'c' not between 'c' and 'c'", false);
+        assertFunction("'c' not between 'b' and 'c'", false);
+        assertFunction("'c' not between 'c' and 'd'", false);
+        assertFunction("'c' not between 'd' and 'b'", true);
+        assertFunction("'b' not between 'c' and 'd'", true);
+        assertFunction("'e' not between 'c' and 'd'", true);
+        assertFunction("null not between 'b' and 'd'", null);
+        assertFunction("'c' not between null and 'd'", null);
+        assertFunction("'c' not between 'b' and null", null);
     }
 
     @Test

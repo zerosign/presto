@@ -269,11 +269,22 @@ public final class HiveUtil
         return getTableObjectInspector(getTableMetadata(table)).getAllStructFieldRefs();
     }
 
-    @SuppressWarnings("deprecation")
-    public static Deserializer getDeserializer(Properties schema)
+    public static boolean isDeserializerClass(Properties schema, Class<?> deserializerClass)
+    {
+        return getDeserializerClassName(schema).equals(deserializerClass.getName());
+    }
+
+    public static String getDeserializerClassName(Properties schema)
     {
         String name = schema.getProperty(SERIALIZATION_LIB);
         checkCondition(name != null, HIVE_INVALID_METADATA, "Table or partition is missing Hive deserializer property: %s", SERIALIZATION_LIB);
+        return name;
+    }
+
+    @SuppressWarnings("deprecation")
+    public static Deserializer getDeserializer(Properties schema)
+    {
+        String name = getDeserializerClassName(schema);
 
         Deserializer deserializer = createDeserializer(getDeserializerClass(name));
         initializeDeserializer(deserializer, schema);
@@ -418,6 +429,12 @@ public final class HiveUtil
     public static boolean isMapType(Type type)
     {
         return type.getTypeSignature().getBase().equals(StandardTypes.MAP);
+    }
+
+    public static boolean isStructuralType(Type type)
+    {
+        String baseName = type.getTypeSignature().getBase();
+        return baseName.equals(StandardTypes.MAP) || baseName.equals(StandardTypes.ARRAY) || baseName.equals(StandardTypes.ROW);
     }
 
     public static boolean isStructuralType(HiveType hiveType)

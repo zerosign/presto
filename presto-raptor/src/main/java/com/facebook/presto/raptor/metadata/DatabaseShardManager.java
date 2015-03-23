@@ -25,15 +25,14 @@ import com.google.common.cache.LoadingCache;
 import com.google.common.collect.Maps;
 import com.google.common.util.concurrent.ExecutionError;
 import com.google.common.util.concurrent.UncheckedExecutionException;
+import io.airlift.log.Logger;
 import org.skife.jdbi.v2.Handle;
 import org.skife.jdbi.v2.IDBI;
-import org.skife.jdbi.v2.TransactionStatus;
-import org.skife.jdbi.v2.VoidTransactionCallback;
+import org.skife.jdbi.v2.exceptions.DBIException;
 
 import javax.inject.Inject;
 
 import java.sql.JDBCType;
-import java.sql.SQLException;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -45,8 +44,6 @@ import java.util.UUID;
 import static com.facebook.presto.raptor.RaptorErrorCode.RAPTOR_EXTERNAL_BATCH_ALREADY_EXISTS;
 import static com.facebook.presto.raptor.metadata.ShardManagerDaoUtils.createShardTablesWithRetry;
 import static com.facebook.presto.raptor.metadata.ShardPredicate.jdbcType;
-import static com.facebook.presto.raptor.metadata.ShardPredicate.maxColumn;
-import static com.facebook.presto.raptor.metadata.ShardPredicate.minColumn;
 import static com.facebook.presto.raptor.metadata.SqlUtils.runIgnoringConstraintViolation;
 import static com.facebook.presto.raptor.storage.ShardStats.MAX_BINARY_INDEX_SIZE;
 import static com.facebook.presto.spi.StandardErrorCode.INTERNAL_ERROR;
@@ -58,6 +55,8 @@ public class DatabaseShardManager
         implements ShardManager
 {
     private static final String INDEX_TABLE_PREFIX = "x_shards_t";
+
+    private static final Logger log = Logger.get(DatabaseShardManager.class);
 
     private final IDBI dbi;
     private final ShardManagerDao dao;
@@ -104,10 +103,9 @@ public class DatabaseShardManager
                 "  UNIQUE (shard_uuid)\n" +
                 ")";
 
-        dbi.withHandle(handle -> {
+        try (Handle handle = dbi.open()) {
             handle.execute(sql);
-            return null;
-        });
+        }
     }
 
     @Override
@@ -124,31 +122,25 @@ public class DatabaseShardManager
                 .collect(toSet());
         Map<String, Long> nodeIds = Maps.toMap(identifiers, this::getOrCreateNodeId);
 
-        dbi.inTransaction(new VoidTransactionCallback()
-        {
-            @Override
-            protected void execute(Handle handle, TransactionStatus status)
-                    throws SQLException
-            {
-                ShardManagerDao dao = handle.attach(ShardManagerDao.class);
+        dbi.inTransaction((handle, status) -> {
+            ShardManagerDao dao = handle.attach(ShardManagerDao.class);
 
-                try (IndexInserter indexInserter = new IndexInserter(handle.getConnection(), tableId, columns)) {
-                    for (ShardInfo shard : shards) {
-                        long shardId = dao.insertShard(shard.getShardUuid(), shard.getRowCount(), shard.getDataSize());
-                        dao.insertTableShard(tableId, shardId);
+            try (IndexInserter indexInserter = new IndexInserter(handle.getConnection(), tableId, columns)) {
+                for (ShardInfo shard : shards) {
+                    long shardId = dao.insertShard(shard.getShardUuid(), tableId, shard.getRowCount(), shard.getDataSize());
 
-                        for (String nodeIdentifier : shard.getNodeIdentifiers()) {
-                            dao.insertShardNode(shardId, nodeIds.get(nodeIdentifier));
-                        }
-
-                        indexInserter.insert(shardId, shard.getShardUuid(), shard.getColumnStats());
+                    for (String nodeIdentifier : shard.getNodeIdentifiers()) {
+                        dao.insertShardNode(shardId, nodeIds.get(nodeIdentifier));
                     }
-                }
 
-                if (externalBatchId.isPresent()) {
-                    dao.insertExternalBatch(externalBatchId.get());
+                    indexInserter.insert(shardId, shard.getShardUuid(), shard.getColumnStats());
                 }
             }
+
+            if (externalBatchId.isPresent()) {
+                dao.insertExternalBatch(externalBatchId.get());
+            }
+            return null;
         });
     }
 
@@ -167,7 +159,19 @@ public class DatabaseShardManager
     @Override
     public void dropTableShards(long tableId)
     {
-        dao.dropTableShards(tableId);
+        dbi.inTransaction((handle, status) -> {
+            ShardManagerDao dao = handle.attach(ShardManagerDao.class);
+            dao.dropShardNodes(tableId);
+            dao.dropShards(tableId);
+            return null;
+        });
+
+        try (Handle handle = dbi.open()) {
+            handle.execute("DROP TABLE " + shardIndexTable(tableId));
+        }
+        catch (DBIException e) {
+            log.warn(e, "Failed to drop table %s", shardIndexTable(tableId));
+        }
     }
 
     @Override
@@ -209,6 +213,16 @@ public class DatabaseShardManager
     static String shardIndexTable(long tableId)
     {
         return INDEX_TABLE_PREFIX + tableId;
+    }
+
+    public static String minColumn(long columnId)
+    {
+        return format("c%s_min", columnId);
+    }
+
+    public static String maxColumn(long columnId)
+    {
+        return format("c%s_max", columnId);
     }
 
     private static String sqlColumnType(Type type)
