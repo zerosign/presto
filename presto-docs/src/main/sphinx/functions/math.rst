@@ -36,7 +36,7 @@ Mathematical Functions
 
 .. function:: degrees(x) -> double
 
-    Returns converts angle ``x`` in radians to degrees
+    Converts angle ``x`` in radians to degrees.
 
 .. function:: e() -> double
 
@@ -49,6 +49,10 @@ Mathematical Functions
 .. function:: floor(x) -> [same as input]
 
     Returns ``x`` rounded down to the nearest integer.
+
+.. function:: from_base(string, radix) -> bigint
+
+    Returns the value of ``string`` interpreted as a base-``radix`` number.
 
 .. function:: ln(x) -> double
 
@@ -80,7 +84,7 @@ Mathematical Functions
 
 .. function:: radians(x) -> double
 
-    Returns converts angle ``x`` in degrees to radians
+    Converts angle ``x`` in degrees to radians.
 
 .. function:: rand() -> double
 
@@ -102,10 +106,15 @@ Mathematical Functions
 
     Returns the square root of ``x``.
 
+.. function:: to_base(x, radix) -> varchar
+
+    Returns the base-``radix`` representation of ``x``.
+
 Trigonometric Functions
 -----------------------
 
 All trigonometric function arguments are expressed in radians.
+See unit conversion functions :func:`degrees` and :func:`radians`.
 
 .. function:: acos(x) -> double
 

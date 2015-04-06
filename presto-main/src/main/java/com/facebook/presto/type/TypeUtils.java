@@ -27,16 +27,19 @@ import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.spi.type.TypeSignature;
+import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import io.airlift.slice.DynamicSliceOutput;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 
+import java.lang.invoke.MethodHandle;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
+import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
 import static com.google.common.base.Preconditions.checkArgument;
@@ -57,6 +60,33 @@ public final class TypeUtils
             return NULL_HASH_CODE;
         }
         return type.hash(block, position);
+    }
+
+    public static long hashPosition(MethodHandle methodHandle, Type type, Block block, int position)
+    {
+        if (block.isNull(position)) {
+            return NULL_HASH_CODE;
+        }
+        try {
+            if (type.getJavaType() == boolean.class) {
+                return (long) methodHandle.invoke(type.getBoolean(block, position));
+            }
+            else if (type.getJavaType() == long.class) {
+                return (long) methodHandle.invoke(type.getLong(block, position));
+            }
+            else if (type.getJavaType() == double.class) {
+                return (long) methodHandle.invoke(type.getDouble(block, position));
+            }
+            else if (type.getJavaType() == Slice.class) {
+                return (long) methodHandle.invoke(type.getSlice(block, position));
+            }
+            else {
+                throw new UnsupportedOperationException("Unsupported native container type: " + type.getJavaType() + " with type " + type.getTypeSignature());
+            }
+        }
+        catch (Throwable throwable) {
+            throw Throwables.propagate(throwable);
+        }
     }
 
     public static boolean positionEqualsPosition(Type type, Block leftBlock, int leftPosition, Block rightBlock, int rightPosition)
@@ -226,5 +256,12 @@ public final class TypeUtils
     public static Block readStructuralBlock(Slice slice)
     {
         return new VariableWidthBlockEncoding().readBlock(slice.getInput());
+    }
+
+    public static void checkElementNotNull(boolean isNull, String errorMsg)
+    {
+        if (isNull) {
+            throw new PrestoException(NOT_SUPPORTED, errorMsg);
+        }
     }
 }
