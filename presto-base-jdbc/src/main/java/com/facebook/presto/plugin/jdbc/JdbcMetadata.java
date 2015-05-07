@@ -14,7 +14,7 @@
 package com.facebook.presto.plugin.jdbc;
 
 import com.facebook.presto.spi.ColumnMetadata;
-import com.facebook.presto.spi.ConnectorColumnHandle;
+import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorInsertTableHandle;
 import com.facebook.presto.spi.ConnectorMetadata;
 import com.facebook.presto.spi.ConnectorOutputTableHandle;
@@ -37,17 +37,22 @@ import java.util.Map;
 
 import static com.facebook.presto.plugin.jdbc.Types.checkType;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
+import static com.facebook.presto.spi.StandardErrorCode.PERMISSION_DENIED;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 public class JdbcMetadata
         implements ConnectorMetadata
 {
     private final JdbcClient jdbcClient;
+    private final boolean allowDropTable;
 
     @Inject
-    public JdbcMetadata(JdbcConnectorId connectorId, JdbcClient jdbcClient)
+    public JdbcMetadata(JdbcConnectorId connectorId, JdbcClient jdbcClient, JdbcMetadataConfig config)
     {
         this.jdbcClient = checkNotNull(jdbcClient, "client is null");
+
+        checkNotNull(config, "config is null");
+        allowDropTable = config.isAllowDropTable();
     }
 
     @Override
@@ -81,17 +86,17 @@ public class JdbcMetadata
     }
 
     @Override
-    public ConnectorColumnHandle getSampleWeightColumnHandle(ConnectorTableHandle tableHandle)
+    public ColumnHandle getSampleWeightColumnHandle(ConnectorTableHandle tableHandle)
     {
         return null;
     }
 
     @Override
-    public Map<String, ConnectorColumnHandle> getColumnHandles(ConnectorTableHandle tableHandle)
+    public Map<String, ColumnHandle> getColumnHandles(ConnectorTableHandle tableHandle)
     {
         JdbcTableHandle jdbcTableHandle = checkType(tableHandle, JdbcTableHandle.class, "tableHandle");
 
-        ImmutableMap.Builder<String, ConnectorColumnHandle> columnHandles = ImmutableMap.builder();
+        ImmutableMap.Builder<String, ColumnHandle> columnHandles = ImmutableMap.builder();
         for (JdbcColumnHandle column : jdbcClient.getColumns(jdbcTableHandle)) {
             columnHandles.put(column.getColumnMetadata().getName(), column);
         }
@@ -118,7 +123,7 @@ public class JdbcMetadata
     }
 
     @Override
-    public ColumnMetadata getColumnMetadata(ConnectorTableHandle tableHandle, ConnectorColumnHandle columnHandle)
+    public ColumnMetadata getColumnMetadata(ConnectorTableHandle tableHandle, ColumnHandle columnHandle)
     {
         checkType(tableHandle, JdbcTableHandle.class, "tableHandle");
         return checkType(columnHandle, JdbcColumnHandle.class, "columnHandle").getColumnMetadata();
@@ -139,7 +144,11 @@ public class JdbcMetadata
     @Override
     public void dropTable(ConnectorTableHandle tableHandle)
     {
-        throw new PrestoException(NOT_SUPPORTED, "This connector does not support dropping tables");
+        if (!allowDropTable) {
+            throw new PrestoException(PERMISSION_DENIED, "DROP TABLE is disabled in this catalog");
+        }
+        JdbcTableHandle handle = checkType(tableHandle, JdbcTableHandle.class, "tableHandle");
+        jdbcClient.dropTable(handle);
     }
 
     @Override

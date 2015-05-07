@@ -103,6 +103,7 @@ public class HashGenerationOptimizer
                         node.getAggregations(),
                         node.getFunctions(),
                         node.getMasks(),
+                        node.getStep(),
                         node.getSampleWeight(),
                         node.getConfidence(),
                         Optional.empty());
@@ -116,6 +117,7 @@ public class HashGenerationOptimizer
                     node.getAggregations(),
                     node.getFunctions(),
                     node.getMasks(),
+                    node.getStep(),
                     node.getSampleWeight(),
                     node.getConfidence(),
                     Optional.of(hashSymbol));
@@ -271,7 +273,9 @@ public class HashGenerationOptimizer
                         node.getFrame(),
                         node.getWindowFunctions(),
                         node.getSignatures(),
-                        Optional.empty());
+                        Optional.empty(),
+                        node.getPrePartitionedInputs(),
+                        node.getPreSortedOrderPrefix());
             }
             Symbol hashSymbol = symbolAllocator.newHashSymbol();
             PlanNode hashProjectNode = getHashProjectNode(idAllocator, rewrittenSource, hashSymbol, node.getPartitionBy());
@@ -283,7 +287,9 @@ public class HashGenerationOptimizer
                     node.getFrame(),
                     node.getWindowFunctions(),
                     node.getSignatures(),
-                    Optional.of(hashSymbol));
+                    Optional.of(hashSymbol),
+                    node.getPrePartitionedInputs(),
+                    node.getPreSortedOrderPrefix());
         }
     }
 

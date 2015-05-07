@@ -21,7 +21,9 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
 import io.airlift.slice.XxHash64;
 import it.unimi.dsi.fastutil.HashCommon;
+import it.unimi.dsi.fastutil.longs.AbstractLongIterator;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
+import it.unimi.dsi.fastutil.longs.LongIterator;
 
 import java.util.Arrays;
 import java.util.List;
@@ -29,6 +31,7 @@ import java.util.List;
 import static com.facebook.presto.operator.SyntheticAddress.decodePosition;
 import static com.facebook.presto.operator.SyntheticAddress.decodeSliceIndex;
 import static com.google.common.base.Preconditions.checkNotNull;
+import static io.airlift.slice.SizeOf.sizeOfBooleanArray;
 import static io.airlift.slice.SizeOf.sizeOfIntArray;
 
 // This implementation assumes arrays used in the hash are always a power of 2
@@ -41,24 +44,25 @@ public final class InMemoryJoinHash
     private final int channelCount;
     private final int mask;
     private final int[] key;
+    private final boolean[] keyVisited;
     private final int[] positionLinks;
+    private final long size;
     private final List<Type> hashTypes;
 
-    public InMemoryJoinHash(LongArrayList addresses, List<Type> hashTypes, PagesHashStrategy pagesHashStrategy, OperatorContext operatorContext)
+    public InMemoryJoinHash(LongArrayList addresses, List<Type> hashTypes, PagesHashStrategy pagesHashStrategy)
     {
         this.addresses = checkNotNull(addresses, "addresses is null");
         this.hashTypes = ImmutableList.copyOf(checkNotNull(hashTypes, "hashTypes is null"));
         this.pagesHashStrategy = checkNotNull(pagesHashStrategy, "pagesHashStrategy is null");
         this.channelCount = pagesHashStrategy.getChannelCount();
 
-        checkNotNull(operatorContext, "operatorContext is null");
-
         // reserve memory for the arrays
         int hashSize = HashCommon.arraySize(addresses.size(), 0.75f);
-        operatorContext.reserveMemory(sizeOfIntArray(hashSize) + sizeOfIntArray(addresses.size()));
+        size = sizeOfIntArray(hashSize) + sizeOfBooleanArray(hashSize) + sizeOfIntArray(addresses.size());
 
         mask = hashSize - 1;
         key = new int[hashSize];
+        keyVisited = new boolean[hashSize];
         Arrays.fill(key, -1);
 
         this.positionLinks = new int[addresses.size()];
@@ -94,6 +98,12 @@ public final class InMemoryJoinHash
     }
 
     @Override
+    public long getInMemorySizeInBytes()
+    {
+        return size;
+    }
+
+    @Override
     public long getJoinPosition(int position, Page page)
     {
         return getJoinPosition(position, page, pagesHashStrategy.hashRow(position, page.getBlocks()));
@@ -106,6 +116,7 @@ public final class InMemoryJoinHash
 
         while (key[pos] != -1) {
             if (positionEqualsCurrentRow(key[pos], position, page.getBlocks())) {
+                keyVisited[pos] = true;
                 return key[pos];
             }
             // increment position and mask to handler wrap around
@@ -118,6 +129,56 @@ public final class InMemoryJoinHash
     public final long getNextJoinPosition(long currentPosition)
     {
         return positionLinks[Ints.checkedCast(currentPosition)];
+    }
+
+    @Override
+    public LongIterator getUnvisitedJoinPositions()
+    {
+        return new UnvisitedJoinPositionIterator();
+    }
+
+    public class UnvisitedJoinPositionIterator extends AbstractLongIterator
+    {
+        private int nextKeyId = 0;
+        private long nextJoinPosition = -1;
+
+        private UnvisitedJoinPositionIterator()
+        {
+            findUnvisitedKeyId();
+        }
+
+        @Override
+        public long nextLong()
+        {
+            long result = nextJoinPosition;
+
+            nextJoinPosition = getNextJoinPosition(nextJoinPosition);
+            if (nextJoinPosition < 0) {
+                nextKeyId++;
+                findUnvisitedKeyId();
+            }
+
+            return result;
+        }
+
+        @Override
+        public boolean hasNext()
+        {
+            return nextKeyId < keyVisited.length;
+        }
+
+        private void findUnvisitedKeyId()
+        {
+            while (nextKeyId < keyVisited.length) {
+                if (key[nextKeyId] != -1 && !keyVisited[nextKeyId]) {
+                    break;
+                }
+                nextKeyId++;
+            }
+            if (nextKeyId < keyVisited.length) {
+                nextJoinPosition = key[nextKeyId];
+            }
+        }
     }
 
     @Override

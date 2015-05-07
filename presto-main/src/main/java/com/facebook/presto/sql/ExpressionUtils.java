@@ -34,6 +34,7 @@ import java.util.List;
 
 import static com.facebook.presto.sql.tree.BooleanLiteral.FALSE_LITERAL;
 import static com.facebook.presto.sql.tree.BooleanLiteral.TRUE_LITERAL;
+import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
 import static com.google.common.base.Predicates.not;
 import static com.google.common.collect.Iterables.filter;
 
@@ -154,19 +155,35 @@ public final class ExpressionUtils
         return combineConjuncts(filter(extractConjuncts(expression), DeterminismEvaluator::isDeterministic));
     }
 
-    public static Function<Expression, Expression> expressionOrNullSymbols(final Predicate<Symbol> nullSymbolScope)
+    public static Expression stripDeterministicConjuncts(Expression expression)
+    {
+        return combineConjuncts(extractConjuncts(expression)
+                .stream()
+                .filter((conjunct) -> !DeterminismEvaluator.isDeterministic(conjunct))
+                .collect(toImmutableList()));
+    }
+
+    public static Function<Expression, Expression> expressionOrNullSymbols(final Predicate<Symbol>... nullSymbolScopes)
     {
         return expression -> {
-            Iterable<Symbol> symbols = filter(DependencyExtractor.extractUnique(expression), nullSymbolScope);
-            if (Iterables.isEmpty(symbols)) {
-                return expression;
+            ImmutableList.Builder<Expression> resultDisjunct = ImmutableList.builder();
+            resultDisjunct.add(expression);
+
+            for (Predicate<Symbol> nullSymbolScope : nullSymbolScopes) {
+                Iterable<Symbol> symbols = filter(DependencyExtractor.extractUnique(expression), nullSymbolScope);
+                if (Iterables.isEmpty(symbols)) {
+                    continue;
+                }
+
+                ImmutableList.Builder<Expression> nullConjuncts = ImmutableList.builder();
+                for (Symbol symbol : symbols) {
+                    nullConjuncts.add(new IsNullPredicate(new QualifiedNameReference(symbol.toQualifiedName())));
+                }
+
+                resultDisjunct.add(and(nullConjuncts.build()));
             }
 
-            ImmutableList.Builder<Expression> nullConjuncts = ImmutableList.builder();
-            for (Symbol symbol : symbols) {
-                nullConjuncts.add(new IsNullPredicate(new QualifiedNameReference(symbol.toQualifiedName())));
-            }
-            return or(expression, and(nullConjuncts.build()));
+            return or(resultDisjunct.build());
         };
     }
 

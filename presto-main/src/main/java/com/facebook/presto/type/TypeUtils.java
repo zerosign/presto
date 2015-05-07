@@ -23,6 +23,7 @@ import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.block.BlockEncoding;
 import com.facebook.presto.spi.block.VariableWidthBlockBuilder;
 import com.facebook.presto.spi.block.VariableWidthBlockEncoding;
+import com.facebook.presto.spi.type.FixedWidthType;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
@@ -52,6 +53,14 @@ public final class TypeUtils
 
     private TypeUtils()
     {
+    }
+
+    public static int expectedValueSize(Type type, int defaultSize)
+    {
+        if (type instanceof FixedWidthType) {
+            return ((FixedWidthType) type).getFixedSize();
+        }
+        return defaultSize;
     }
 
     public static int hashPosition(Type type, Block block, int position)
@@ -245,8 +254,12 @@ public final class TypeUtils
 
     public static Slice buildStructuralSlice(BlockBuilder builder)
     {
-        BlockEncoding encoding = builder.getEncoding();
-        Block block = builder.build();
+        return buildStructuralSlice(builder.build());
+    }
+
+    public static Slice buildStructuralSlice(Block block)
+    {
+        BlockEncoding encoding = block.getEncoding();
         DynamicSliceOutput output = new DynamicSliceOutput(encoding.getEstimatedSize(block));
         encoding.writeBlock(output, block);
 

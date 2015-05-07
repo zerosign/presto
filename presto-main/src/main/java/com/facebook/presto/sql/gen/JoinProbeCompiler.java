@@ -15,9 +15,11 @@ package com.facebook.presto.sql.gen;
 
 import com.facebook.presto.byteCode.Block;
 import com.facebook.presto.byteCode.ClassDefinition;
-import com.facebook.presto.byteCode.CompilerContext;
 import com.facebook.presto.byteCode.DynamicClassLoader;
 import com.facebook.presto.byteCode.FieldDefinition;
+import com.facebook.presto.byteCode.MethodDefinition;
+import com.facebook.presto.byteCode.Parameter;
+import com.facebook.presto.byteCode.Variable;
 import com.facebook.presto.byteCode.control.IfStatement;
 import com.facebook.presto.byteCode.expression.ByteCodeExpression;
 import com.facebook.presto.byteCode.instruction.JumpInstruction;
@@ -26,6 +28,7 @@ import com.facebook.presto.operator.JoinProbe;
 import com.facebook.presto.operator.JoinProbeFactory;
 import com.facebook.presto.operator.LookupJoinOperator;
 import com.facebook.presto.operator.LookupJoinOperatorFactory;
+import com.facebook.presto.operator.LookupJoinOperators.JoinType;
 import com.facebook.presto.operator.LookupSource;
 import com.facebook.presto.operator.LookupSourceSupplier;
 import com.facebook.presto.operator.OperatorFactory;
@@ -54,12 +57,11 @@ import static com.facebook.presto.byteCode.Access.FINAL;
 import static com.facebook.presto.byteCode.Access.PRIVATE;
 import static com.facebook.presto.byteCode.Access.PUBLIC;
 import static com.facebook.presto.byteCode.Access.a;
-import static com.facebook.presto.byteCode.NamedParameterDefinition.arg;
+import static com.facebook.presto.byteCode.Parameter.arg;
 import static com.facebook.presto.byteCode.ParameterizedType.type;
 import static com.facebook.presto.byteCode.expression.ByteCodeExpressions.constantInt;
 import static com.facebook.presto.byteCode.expression.ByteCodeExpressions.constantLong;
 import static com.facebook.presto.byteCode.expression.ByteCodeExpressions.newInstance;
-import static com.facebook.presto.sql.gen.Bootstrap.BOOTSTRAP_METHOD;
 import static com.facebook.presto.sql.gen.CompilerUtils.defineClass;
 import static com.facebook.presto.sql.gen.CompilerUtils.makeClassName;
 import static com.facebook.presto.sql.gen.SqlTypeByteCodeExpression.constantType;
@@ -82,11 +84,11 @@ public class JoinProbeCompiler
             List<? extends Type> probeTypes,
             List<Integer> probeJoinChannel,
             Optional<Integer> probeHashChannel,
-            boolean enableOuterJoin)
+            JoinType joinType)
     {
         try {
-            HashJoinOperatorFactoryFactory operatorFactoryFactory = joinProbeFactories.get(new JoinOperatorCacheKey(probeTypes, probeJoinChannel, probeHashChannel, enableOuterJoin));
-            return operatorFactoryFactory.createHashJoinOperatorFactory(operatorId, lookupSourceSupplier, probeTypes, probeJoinChannel, enableOuterJoin);
+            HashJoinOperatorFactoryFactory operatorFactoryFactory = joinProbeFactories.get(new JoinOperatorCacheKey(probeTypes, probeJoinChannel, probeHashChannel, joinType));
+            return operatorFactoryFactory.createHashJoinOperatorFactory(operatorId, lookupSourceSupplier, probeTypes, probeJoinChannel, joinType);
         }
         catch (ExecutionException | UncheckedExecutionException | ExecutionError e) {
             throw Throwables.propagate(e.getCause());
@@ -97,7 +99,7 @@ public class JoinProbeCompiler
     {
         Class<? extends JoinProbe> joinProbeClass = compileJoinProbe(types, probeJoinChannel, probeHashChannel);
 
-        ClassDefinition classDefinition = new ClassDefinition(new CompilerContext(BOOTSTRAP_METHOD),
+        ClassDefinition classDefinition = new ClassDefinition(
                 a(PUBLIC, FINAL),
                 makeClassName("JoinProbeFactory"),
                 type(Object.class),
@@ -105,17 +107,15 @@ public class JoinProbeCompiler
 
         classDefinition.declareDefaultConstructor(a(PUBLIC));
 
-        classDefinition.declareMethod(new CompilerContext(BOOTSTRAP_METHOD),
-                a(PUBLIC),
-                "createJoinProbe",
-                type(JoinProbe.class),
-                arg("lookupSource", LookupSource.class),
-                arg("page", Page.class))
-                .getBody()
+        Parameter lookupSource = arg("lookupSource", LookupSource.class);
+        Parameter page = arg("page", Page.class);
+        MethodDefinition method = classDefinition.declareMethod(a(PUBLIC), "createJoinProbe", type(JoinProbe.class), lookupSource, page);
+
+        method.getBody()
                 .newObject(joinProbeClass)
                 .dup()
-                .getVariable("lookupSource")
-                .getVariable("page")
+                .append(lookupSource)
+                .append(page)
                 .invokeConstructor(joinProbeClass, LookupSource.class, Page.class)
                 .retObject();
 
@@ -148,7 +148,7 @@ public class JoinProbeCompiler
     {
         CallSiteBinder callSiteBinder = new CallSiteBinder();
 
-        ClassDefinition classDefinition = new ClassDefinition(new CompilerContext(BOOTSTRAP_METHOD),
+        ClassDefinition classDefinition = new ClassDefinition(
                 a(PUBLIC, FINAL),
                 makeClassName("JoinProbe"),
                 type(Object.class),
@@ -194,73 +194,74 @@ public class JoinProbeCompiler
             FieldDefinition positionField,
             FieldDefinition positionCountField)
     {
-        CompilerContext context = new CompilerContext(BOOTSTRAP_METHOD);
-        Block constructor = classDefinition.declareConstructor(context,
-                a(PUBLIC),
-                arg("lookupSource", LookupSource.class),
-                arg("page", Page.class))
+        Parameter lookupSource = arg("lookupSource", LookupSource.class);
+        Parameter page = arg("page", Page.class);
+        MethodDefinition constructorDefinition = classDefinition.declareConstructor(a(PUBLIC), lookupSource, page);
+
+        Variable thisVariable = constructorDefinition.getThis();
+
+        Block constructor = constructorDefinition
                 .getBody()
                 .comment("super();")
-                .pushThis()
+                .append(thisVariable)
                 .invokeConstructor(Object.class);
 
         constructor.comment("this.lookupSource = lookupSource;")
-                .append(context.getVariable("this").setField(lookupSourceField, context.getVariable("lookupSource")));
+                .append(thisVariable.setField(lookupSourceField, lookupSource));
 
         constructor.comment("this.positionCount = page.getPositionCount();")
-                .append(context.getVariable("this").setField(positionCountField, context.getVariable("page").invoke("getPositionCount", int.class)));
+                .append(thisVariable.setField(positionCountField, page.invoke("getPositionCount", int.class)));
 
         constructor.comment("Set block fields");
         for (int index = 0; index < blockFields.size(); index++) {
-            constructor.append(context.getVariable("this").setField(
+            constructor.append(thisVariable.setField(
                     blockFields.get(index),
-                    context.getVariable("page").invoke("getBlock", com.facebook.presto.spi.block.Block.class, constantInt(index))));
+                    page.invoke("getBlock", com.facebook.presto.spi.block.Block.class, constantInt(index))));
         }
 
         constructor.comment("Set probe channel fields");
         for (int index = 0; index < probeChannelFields.size(); index++) {
-            constructor.append(context.getVariable("this").setField(
+            constructor.append(thisVariable.setField(
                     probeChannelFields.get(index),
-                    context.getVariable("this").getField(blockFields.get(probeChannels.get(index)))));
+                    thisVariable.getField(blockFields.get(probeChannels.get(index)))));
         }
 
         constructor.comment("this.probeBlocks = new Block[<probeChannelCount>];");
         constructor
-                .pushThis()
+                .append(thisVariable)
                 .push(probeChannelFields.size())
                 .newArray(com.facebook.presto.spi.block.Block.class)
                 .putField(probeBlocksArrayField);
         for (int index = 0; index < probeChannelFields.size(); index++) {
             constructor
-                    .pushThis()
+                    .append(thisVariable)
                     .getField(probeBlocksArrayField)
                     .push(index)
-                    .pushThis()
+                    .append(thisVariable)
                     .getField(probeChannelFields.get(index))
                     .putObjectArrayElement();
         }
 
-        ByteCodeExpression page = newInstance(Page.class, context.getVariable("this").getField(probeBlocksArrayField));
         constructor.comment("this.probePage = new Page(probeBlocks)")
-                .append(context.getVariable("this").setField(probePageField, page));
+                .append(thisVariable.setField(probePageField, newInstance(Page.class, thisVariable.getField(probeBlocksArrayField))));
 
         if (probeHashChannel.isPresent()) {
             Integer index = probeHashChannel.get();
             constructor.comment("this.probeHashBlock = blocks[hashChannel.get()]")
-                    .append(context.getVariable("this").setField(
+                    .append(thisVariable.setField(
                             probeHashBlockField,
-                            context.getVariable("this").getField(blockFields.get(index))));
+                            thisVariable.getField(blockFields.get(index))));
         }
 
         constructor.comment("this.position = -1;")
-                .append(context.getVariable("this").setField(positionField, constantInt(-1)));
+                .append(thisVariable.setField(positionField, constantInt(-1)));
 
         constructor.ret();
     }
 
     private void generateGetChannelCountMethod(ClassDefinition classDefinition, int channelCount)
     {
-        classDefinition.declareMethod(new CompilerContext(BOOTSTRAP_METHOD),
+        classDefinition.declareMethod(
                 a(PUBLIC),
                 "getChannelCount",
                 type(int.class))
@@ -275,39 +276,39 @@ public class JoinProbeCompiler
             List<Type> types, List<FieldDefinition> blockFields,
             FieldDefinition positionField)
     {
-        CompilerContext context = new CompilerContext(BOOTSTRAP_METHOD);
-        Block appendToBody = classDefinition.declareMethod(context,
+        Parameter pageBuilder = arg("pageBuilder", PageBuilder.class);
+        MethodDefinition method = classDefinition.declareMethod(
                 a(PUBLIC),
                 "appendTo",
                 type(void.class),
-                arg("pageBuilder", PageBuilder.class))
-                .getBody();
+                pageBuilder);
 
+        Variable thisVariable = method.getThis();
         for (int index = 0; index < blockFields.size(); index++) {
             Type type = types.get(index);
-            appendToBody
+            method.getBody()
                     .comment("%s.appendTo(block_%s, position, pageBuilder.getBlockBuilder(%s));", type.getClass(), index, index)
-                    .append(constantType(context, callSiteBinder, type).invoke("appendTo", void.class,
-                            context.getVariable("this").getField(blockFields.get(index)),
-                            context.getVariable("this").getField(positionField),
-                            context.getVariable("pageBuilder").invoke("getBlockBuilder", BlockBuilder.class, constantInt(index))));
+                    .append(constantType(callSiteBinder, type).invoke("appendTo", void.class,
+                            thisVariable.getField(blockFields.get(index)),
+                            thisVariable.getField(positionField),
+                            pageBuilder.invoke("getBlockBuilder", BlockBuilder.class, constantInt(index))));
         }
-        appendToBody.ret();
+        method.getBody()
+                .ret();
     }
 
     private void generateAdvanceNextPosition(ClassDefinition classDefinition, FieldDefinition positionField, FieldDefinition positionCountField)
     {
-        CompilerContext context = new CompilerContext(BOOTSTRAP_METHOD);
-        Block advanceNextPositionBody = classDefinition.declareMethod(context,
+        MethodDefinition method = classDefinition.declareMethod(
                 a(PUBLIC),
                 "advanceNextPosition",
-                type(boolean.class))
-                .getBody();
+                type(boolean.class));
 
-        advanceNextPositionBody
+        Variable thisVariable = method.getThis();
+        method.getBody()
                 .comment("this.position = this.position + 1;")
-                .pushThis()
-                .pushThis()
+                .append(thisVariable)
+                .append(thisVariable)
                 .getField(positionField)
                 .push(1)
                 .intAdd()
@@ -315,11 +316,11 @@ public class JoinProbeCompiler
 
         LabelNode lessThan = new LabelNode("lessThan");
         LabelNode end = new LabelNode("end");
-        advanceNextPositionBody
+        method.getBody()
                 .comment("return position < positionCount;")
-                .pushThis()
+                .append(thisVariable)
                 .getField(positionField)
-                .pushThis()
+                .append(thisVariable)
                 .getField(positionCountField)
                 .append(JumpInstruction.jumpIfIntLessThan(lessThan))
                 .push(false)
@@ -338,28 +339,25 @@ public class JoinProbeCompiler
             FieldDefinition probeHashBlockField,
             FieldDefinition positionField)
     {
-        CompilerContext context = new CompilerContext(BOOTSTRAP_METHOD);
-//        Variable thisVariable = context.getVariable("this");
-        Block body = classDefinition.declareMethod(context,
+        MethodDefinition method = classDefinition.declareMethod(
                 a(PUBLIC),
                 "getCurrentJoinPosition",
-                type(long.class))
-                .getBody()
-                .append(new IfStatement(
-                        context,
-                        context.getVariable("this").invoke("currentRowContainsNull", boolean.class),
-                        constantLong(-1).ret(),
-                        null
-                ));
+                type(long.class));
 
-        ByteCodeExpression position = context.getVariable("this").getField(positionField);
-        ByteCodeExpression page = context.getVariable("this").getField(probePageField);
-        ByteCodeExpression probeHashBlock = context.getVariable("this").getField(probeHashBlockField);
+        Variable thisVariable = method.getThis();
+        Block body = method.getBody()
+                .append(new IfStatement()
+                        .condition(thisVariable.invoke("currentRowContainsNull", boolean.class))
+                        .ifTrue(constantLong(-1).ret()));
+
+        ByteCodeExpression position = thisVariable.getField(positionField);
+        ByteCodeExpression page = thisVariable.getField(probePageField);
+        ByteCodeExpression probeHashBlock = thisVariable.getField(probeHashBlockField);
         if (probeHashChannel.isPresent()) {
-            body.append(context.getVariable("this").getField(lookupSourceField).invoke("getJoinPosition", long.class,
+            body.append(thisVariable.getField(lookupSourceField).invoke("getJoinPosition", long.class,
                     position,
                     page,
-                    constantType(context, callSiteBinder, BigintType.BIGINT).invoke("getLong",
+                    constantType(callSiteBinder, BigintType.BIGINT).invoke("getLong",
                             long.class,
                             probeHashBlock,
                             position)
@@ -367,30 +365,31 @@ public class JoinProbeCompiler
                     .retLong();
         }
         else {
-            body.append(context.getVariable("this").getField(lookupSourceField).invoke("getJoinPosition", long.class, position, page)).retLong();
+            body.append(thisVariable.getField(lookupSourceField).invoke("getJoinPosition", long.class, position, page)).retLong();
         }
     }
 
     private void generateCurrentRowContainsNull(ClassDefinition classDefinition, List<FieldDefinition> probeBlockFields, FieldDefinition positionField)
     {
-        CompilerContext context = new CompilerContext(BOOTSTRAP_METHOD);
-        Block body = classDefinition.declareMethod(context,
+        MethodDefinition method = classDefinition.declareMethod(
                 a(PRIVATE),
                 "currentRowContainsNull",
-                type(boolean.class))
-                .getBody();
+                type(boolean.class));
 
+        Variable thisVariable = method.getThis();
         for (FieldDefinition probeBlockField : probeBlockFields) {
             LabelNode checkNextField = new LabelNode("checkNextField");
-            body
-                    .append(context.getVariable("this").getField(probeBlockField).invoke("isNull", boolean.class, context.getVariable("this").getField(positionField)))
+            method.getBody()
+                    .append(thisVariable.getField(probeBlockField).invoke("isNull", boolean.class, thisVariable.getField(positionField)))
                     .ifFalseGoto(checkNextField)
                     .push(true)
                     .retBoolean()
                     .visitLabel(checkNextField);
         }
 
-        body.push(false).retInt();
+        method.getBody()
+                .push(false)
+                .retInt();
     }
 
     public static class ReflectionJoinProbeFactory
@@ -424,18 +423,18 @@ public class JoinProbeCompiler
     {
         private final List<Type> types;
         private final List<Integer> probeChannels;
-        private final boolean enableOuterJoin;
+        private final JoinType joinType;
         private final Optional<Integer> probeHashChannel;
 
         private JoinOperatorCacheKey(List<? extends Type> types,
                 List<Integer> probeChannels,
                 Optional<Integer> probeHashChannel,
-                boolean enableOuterJoin)
+                JoinType joinType)
         {
             this.probeHashChannel = probeHashChannel;
             this.types = ImmutableList.copyOf(types);
             this.probeChannels = ImmutableList.copyOf(probeChannels);
-            this.enableOuterJoin = enableOuterJoin;
+            this.joinType = joinType;
         }
 
         private List<Type> getTypes()
@@ -456,7 +455,7 @@ public class JoinProbeCompiler
         @Override
         public int hashCode()
         {
-            return Objects.hash(types, probeChannels, enableOuterJoin);
+            return Objects.hash(types, probeChannels, joinType);
         }
 
         @Override
@@ -472,7 +471,7 @@ public class JoinProbeCompiler
             return Objects.equals(this.types, other.types) &&
                     Objects.equals(this.probeChannels, other.probeChannels) &&
                     Objects.equals(this.probeHashChannel, other.probeHashChannel) &&
-                    Objects.equals(this.enableOuterJoin, other.enableOuterJoin);
+                    Objects.equals(this.joinType, other.joinType);
         }
     }
 
@@ -486,7 +485,7 @@ public class JoinProbeCompiler
             this.joinProbeFactory = joinProbeFactory;
 
             try {
-                constructor = operatorFactoryClass.getConstructor(int.class, LookupSourceSupplier.class, List.class, boolean.class, JoinProbeFactory.class);
+                constructor = operatorFactoryClass.getConstructor(int.class, LookupSourceSupplier.class, List.class, JoinType.class, JoinProbeFactory.class);
             }
             catch (NoSuchMethodException e) {
                 throw Throwables.propagate(e);
@@ -498,10 +497,10 @@ public class JoinProbeCompiler
                 LookupSourceSupplier lookupSourceSupplier,
                 List<? extends Type> probeTypes,
                 List<Integer> probeJoinChannel,
-                boolean enableOuterJoin)
+                JoinType joinType)
         {
             try {
-                return constructor.newInstance(operatorId, lookupSourceSupplier, probeTypes, enableOuterJoin, joinProbeFactory);
+                return constructor.newInstance(operatorId, lookupSourceSupplier, probeTypes, joinType, joinProbeFactory);
             }
             catch (Exception e) {
                 throw Throwables.propagate(e);

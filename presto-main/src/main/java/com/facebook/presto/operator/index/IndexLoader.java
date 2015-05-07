@@ -31,6 +31,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.units.DataSize;
+import it.unimi.dsi.fastutil.longs.LongIterator;
 
 import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.NotThreadSafe;
@@ -366,6 +367,12 @@ public class IndexLoader
         }
 
         @Override
+        public long getInMemorySizeInBytes()
+        {
+            return 0;
+        }
+
+        @Override
         public long getJoinPosition(int position, Page page, int rawHash)
         {
             return IndexSnapshot.UNLOADED_INDEX_KEY;
@@ -381,6 +388,12 @@ public class IndexLoader
         public long getNextJoinPosition(long currentPosition)
         {
             return IndexSnapshot.UNLOADED_INDEX_KEY;
+        }
+
+        @Override
+        public LongIterator getUnvisitedJoinPositions()
+        {
+            throw new UnsupportedOperationException();
         }
 
         @Override

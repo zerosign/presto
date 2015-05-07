@@ -23,12 +23,14 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 
 import javax.annotation.concurrent.Immutable;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -40,12 +42,13 @@ public class WindowNode
 {
     private final PlanNode source;
     private final List<Symbol> partitionBy;
+    private final Set<Symbol> prePartitionedInputs;
     private final List<Symbol> orderBy;
     private final Map<Symbol, SortOrder> orderings;
+    private final int preSortedOrderPrefix;
     private final Frame frame;
     private final Map<Symbol, FunctionCall> windowFunctions;
     private final Map<Symbol, Signature> functionHandles;
-
     private final Optional<Symbol> hashSymbol;
 
     @JsonCreator
@@ -58,7 +61,9 @@ public class WindowNode
             @JsonProperty("frame") Frame frame,
             @JsonProperty("windowFunctions") Map<Symbol, FunctionCall> windowFunctions,
             @JsonProperty("signatures") Map<Symbol, Signature> signatures,
-            @JsonProperty("hashSymbol") Optional<Symbol> hashSymbol)
+            @JsonProperty("hashSymbol") Optional<Symbol> hashSymbol,
+            @JsonProperty("prePartitionedInputs") Set<Symbol> prePartitionedInputs,
+            @JsonProperty("preSortedOrderPrefix") int preSortedOrderPrefix)
     {
         super(id);
 
@@ -66,20 +71,26 @@ public class WindowNode
         checkNotNull(partitionBy, "partitionBy is null");
         checkNotNull(orderBy, "orderBy is null");
         checkArgument(orderings.size() == orderBy.size(), "orderBy and orderings sizes don't match");
+        checkArgument(orderings.keySet().containsAll(orderBy), "Every orderBy symbol must have an ordering direction");
         checkNotNull(frame, "frame is null");
         checkNotNull(windowFunctions, "windowFunctions is null");
         checkNotNull(signatures, "signatures is null");
         checkArgument(windowFunctions.keySet().equals(signatures.keySet()), "windowFunctions does not match signatures");
         checkNotNull(hashSymbol, "hashSymbol is null");
+        checkArgument(partitionBy.containsAll(prePartitionedInputs), "prePartitionedInputs must be contained in partitionBy");
+        checkArgument(preSortedOrderPrefix <= orderBy.size(), "Cannot have sorted more symbols than those requested");
+        checkArgument(preSortedOrderPrefix == 0 || ImmutableSet.copyOf(prePartitionedInputs).equals(ImmutableSet.copyOf(partitionBy)), "preSortedOrderPrefix can only be greater than zero if all partition symbols are pre-partitioned");
 
         this.source = source;
         this.partitionBy = ImmutableList.copyOf(partitionBy);
+        this.prePartitionedInputs = ImmutableSet.copyOf(prePartitionedInputs);
         this.orderBy = ImmutableList.copyOf(orderBy);
         this.orderings = ImmutableMap.copyOf(orderings);
         this.frame = frame;
         this.windowFunctions = ImmutableMap.copyOf(windowFunctions);
         this.functionHandles = ImmutableMap.copyOf(signatures);
         this.hashSymbol = hashSymbol;
+        this.preSortedOrderPrefix = preSortedOrderPrefix;
     }
 
     @Override
@@ -140,6 +151,18 @@ public class WindowNode
     public Optional<Symbol> getHashSymbol()
     {
         return hashSymbol;
+    }
+
+    @JsonProperty
+    public Set<Symbol> getPrePartitionedInputs()
+    {
+        return prePartitionedInputs;
+    }
+
+    @JsonProperty
+    public int getPreSortedOrderPrefix()
+    {
+        return preSortedOrderPrefix;
     }
 
     @Override

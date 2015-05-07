@@ -90,12 +90,13 @@ import static com.google.common.base.Predicates.equalTo;
 import static com.google.common.collect.Iterables.all;
 import static com.google.common.collect.Iterables.any;
 import static com.google.common.collect.Iterables.transform;
+import static com.google.common.collect.Sets.newConcurrentHashSet;
 import static io.airlift.http.client.HttpUriBuilder.uriBuilderFrom;
 import static io.airlift.units.DataSize.Unit.BYTE;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 @ThreadSafe
-public class SqlStageExecution
+public final class SqlStageExecution
         implements StageExecutionNode
 {
     private static final Logger log = Logger.get(SqlStageExecution.class);
@@ -126,7 +127,7 @@ public class SqlStageExecution
 
     private final LinkedBlockingQueue<Throwable> failureCauses = new LinkedBlockingQueue<>();
 
-    private final Set<PlanNodeId> completeSources = new HashSet<>();
+    private final Set<PlanNodeId> completeSources = newConcurrentHashSet();
 
     @GuardedBy("this")
     private OutputBuffers currentOutputBuffers = INITIAL_EMPTY_OUTPUT_BUFFERS;
@@ -235,7 +236,7 @@ public class SqlStageExecution
                         executor,
                         nodeTaskMap);
 
-                subStage.addStateChangeListener(stageInfo -> doUpdateState());
+                subStage.addStateChangeListener(stageState -> doUpdateState());
 
                 subStages.put(subStageFragmentId, subStage);
             }
@@ -446,21 +447,15 @@ public class SqlStageExecution
 
         currentOutputBuffers = nextOutputBuffers;
         nextOutputBuffers = null;
+        this.notifyAll();
         return currentOutputBuffers;
     }
 
     @Override
-    public void addStateChangeListener(final StateChangeListener<StageInfo> stateChangeListener)
+    public void addStateChangeListener(StateChangeListener<StageState> stateChangeListener)
     {
         try (SetThreadName setThreadName = new SetThreadName("Stage-%s", stageId)) {
-            stageState.addStateChangeListener(new StateChangeListener<StageState>()
-            {
-                @Override
-                public void stateChanged(StageState newValue)
-                {
-                    stateChangeListener.stateChanged(getStageInfo());
-                }
-            });
+            stageState.addStateChangeListener(stageState -> stateChangeListener.stateChanged(stageState));
         }
     }
 
@@ -702,7 +697,7 @@ public class SqlStageExecution
             // otherwise wait for some tasks to complete
             try {
                 // todo this adds latency: replace this wait with an event listener
-                TimeUnit.SECONDS.timedWait(this, 1);
+                TimeUnit.MILLISECONDS.timedWait(this, 100);
             }
             catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -766,11 +761,6 @@ public class SqlStageExecution
         // update in case task finished before listener was registered
         doUpdateState();
 
-        // stop if stage is already done
-        if (getState().isDone()) {
-            return task;
-        }
-
         return task;
     }
 
@@ -785,7 +775,19 @@ public class SqlStageExecution
                 return;
             }
 
-            waitForNewExchangesOrBuffers();
+            synchronized (this) {
+                // wait for a state change
+                //
+                // NOTE this must be a wait with a timeout since there is no notification
+                // for new exchanges from the child stages
+                try {
+                    TimeUnit.MILLISECONDS.timedWait(this, 100);
+                }
+                catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw Throwables.propagate(e);
+                }
+            }
         }
     }
 
@@ -819,36 +821,6 @@ public class SqlStageExecution
         }
 
         return finished;
-    }
-
-    private synchronized void waitForNewExchangesOrBuffers()
-    {
-        while (!getState().isDone()) {
-            // if next loop will finish, don't wait
-            Set<PlanNodeId> completeSources = updateCompleteSources();
-            boolean allSourceComplete = completeSources.containsAll(allSources);
-            if (allSourceComplete && getCurrentOutputBuffers().isNoMoreBufferIds()) {
-                return;
-            }
-            // do we have a new set of output buffers?
-            synchronized (this) {
-                if (nextOutputBuffers != null) {
-                    return;
-                }
-            }
-            // do we have new exchange locations?
-            if (!getNewExchangeLocations().isEmpty()) {
-                return;
-            }
-            // wait for a state change
-            try {
-                TimeUnit.SECONDS.timedWait(this, 1);
-            }
-            catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw Throwables.propagate(e);
-            }
-        }
     }
 
     private Set<PlanNodeId> updateCompleteSources()
@@ -888,7 +860,7 @@ public class SqlStageExecution
                     return;
                 }
 
-                List<StageState> subStageStates = ImmutableList.copyOf(transform(transform(subStages.values(), StageExecutionNode::getStageInfo), StageInfo::getState));
+                List<StageState> subStageStates = ImmutableList.copyOf(transform(subStages.values(), StageExecutionNode::getState));
                 if (subStageStates.stream().anyMatch(StageState::isFailure)) {
                     stageState.set(StageState.ABORTED);
                 }
@@ -997,7 +969,7 @@ public class SqlStageExecution
 
     private static Optional<Integer> getHashChannel(PlanFragment fragment)
     {
-        return fragment.getHash().map(symbol -> fragment.getRoot().getOutputSymbols().indexOf(symbol));
+        return fragment.getHash().map(symbol -> fragment.getOutputLayout().indexOf(symbol));
     }
 
     private static List<Integer> getPartitioningChannels(PlanFragment fragment)
@@ -1005,7 +977,7 @@ public class SqlStageExecution
         checkState(fragment.getOutputPartitioning() == OutputPartitioning.HASH, "fragment is not hash partitioned");
         // We can convert the symbols directly into channels, because the root must be a sink and therefore the layout is fixed
         return fragment.getPartitionBy().stream()
-                .map(symbol -> fragment.getRoot().getOutputSymbols().indexOf(symbol))
+                .map(symbol -> fragment.getOutputLayout().indexOf(symbol))
                 .collect(toImmutableList());
     }
 }
@@ -1028,7 +1000,7 @@ interface StageExecutionNode
 
     Iterable<? extends URI> getTaskLocations();
 
-    void addStateChangeListener(StateChangeListener<StageInfo> stateChangeListener);
+    void addStateChangeListener(StateChangeListener<StageState> stateChangeListener);
 
     void cancelStage(StageId stageId);
 

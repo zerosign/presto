@@ -14,8 +14,8 @@
 package com.facebook.presto.hive;
 
 import com.facebook.presto.hive.metastore.CachingHiveMetastore;
+import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
-import com.facebook.presto.spi.ConnectorColumnHandle;
 import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.ConnectorPageSourceProvider;
 import com.facebook.presto.spi.ConnectorPartitionResult;
@@ -66,6 +66,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.util.concurrent.MoreExecutors.newDirectExecutorService;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
+import static java.lang.String.format;
 import static java.util.Locale.ENGLISH;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static org.testng.Assert.assertEquals;
@@ -76,6 +77,8 @@ import static org.testng.Assert.assertTrue;
 public abstract class AbstractTestHiveClientS3
 {
     private static final ConnectorSession SESSION = new ConnectorSession("user", UTC_KEY, ENGLISH, System.currentTimeMillis(), null);
+
+    protected String writableBucket;
 
     protected String database;
     protected SchemaTableName tableS3;
@@ -118,6 +121,8 @@ public abstract class AbstractTestHiveClientS3
 
     protected void setup(String host, int port, String databaseName, String awsAccessKey, String awsSecretKey, String writableBucket)
     {
+        this.writableBucket = writableBucket;
+
         setupHive(databaseName);
 
         HiveClientConfig hiveClientConfig = new HiveClientConfig()
@@ -160,10 +165,10 @@ public abstract class AbstractTestHiveClientS3
             throws Exception
     {
         ConnectorTableHandle table = getTableHandle(tableS3);
-        List<ConnectorColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(table).values());
+        List<ColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(table).values());
         Map<String, Integer> columnIndex = indexColumns(columnHandles);
 
-        ConnectorPartitionResult partitionResult = splitManager.getPartitions(table, TupleDomain.<ConnectorColumnHandle>all());
+        ConnectorPartitionResult partitionResult = splitManager.getPartitions(table, TupleDomain.<ColumnHandle>all());
         assertEquals(partitionResult.getPartitions().size(), 1);
         ConnectorSplitSource splitSource = splitManager.getPartitionSplits(table, partitionResult.getPartitions());
 
@@ -194,6 +199,70 @@ public abstract class AbstractTestHiveClientS3
         assertTrue(isDirectory(fs.getFileStatus(tablePath)));
         assertFalse(isDirectory(fs.getFileStatus(filePath)));
         assertFalse(fs.exists(new Path(basePath, "foo")));
+    }
+
+    @Test
+    public void testRename()
+            throws Exception
+    {
+        Path basePath = new Path(format("s3://%s/rename/%s/", writableBucket, UUID.randomUUID()));
+        FileSystem fs = hdfsEnvironment.getFileSystem(basePath);
+        assertFalse(fs.exists(basePath));
+
+        // create file foo.txt
+        Path path = new Path(basePath, "foo.txt");
+        assertTrue(fs.createNewFile(path));
+        assertTrue(fs.exists(path));
+
+        // rename foo.txt to bar.txt
+        Path newPath = new Path(basePath, "bar.txt");
+        assertFalse(fs.exists(newPath));
+        assertTrue(fs.rename(path, newPath));
+        assertFalse(fs.exists(path));
+        assertTrue(fs.exists(newPath));
+
+        // create file foo.txt and rename to bar.txt
+        assertTrue(fs.createNewFile(path));
+        assertFalse(fs.rename(path, newPath));
+        assertTrue(fs.exists(path));
+
+        // rename foo.txt to foo.txt
+        assertTrue(fs.rename(path, path));
+        assertTrue(fs.exists(path));
+
+        // delete foo.txt
+        assertTrue(fs.delete(path, false));
+        assertFalse(fs.exists(path));
+
+        // create directory source with file
+        Path source = new Path(basePath, "source");
+        assertTrue(fs.createNewFile(new Path(source, "test.txt")));
+
+        // rename source to non-existing target
+        Path target = new Path(basePath, "target");
+        assertFalse(fs.exists(target));
+        assertTrue(fs.rename(source, target));
+        assertFalse(fs.exists(source));
+        assertTrue(fs.exists(target));
+
+        // create directory source with file
+        assertTrue(fs.createNewFile(new Path(source, "test.txt")));
+
+        // rename source to existing target
+        assertTrue(fs.rename(source, target));
+        assertFalse(fs.exists(source));
+        target = new Path(target, "source");
+        assertTrue(fs.exists(target));
+        assertTrue(fs.exists(new Path(target, "test.txt")));
+
+        // delete target
+        target = new Path(basePath, "target");
+        assertTrue(fs.exists(target));
+        assertTrue(fs.delete(target, true));
+        assertFalse(fs.exists(target));
+
+        // cleanup
+        fs.delete(basePath, true);
     }
 
     @Test
@@ -248,10 +317,10 @@ public abstract class AbstractTestHiveClientS3
 
         // load the new table
         ConnectorTableHandle tableHandle = getTableHandle(tableName);
-        List<ConnectorColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(tableHandle).values());
+        List<ColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(tableHandle).values());
 
         // verify the data
-        ConnectorPartitionResult partitionResult = splitManager.getPartitions(tableHandle, TupleDomain.<ConnectorColumnHandle>all());
+        ConnectorPartitionResult partitionResult = splitManager.getPartitions(tableHandle, TupleDomain.<ColumnHandle>all());
         assertEquals(partitionResult.getPartitions().size(), 1);
         ConnectorSplitSource splitSource = splitManager.getPartitionSplits(tableHandle, partitionResult.getPartitions());
         ConnectorSplit split = getOnlyElement(getAllSplits(splitSource));
@@ -300,11 +369,11 @@ public abstract class AbstractTestHiveClientS3
         return splits.build();
     }
 
-    private static ImmutableMap<String, Integer> indexColumns(List<ConnectorColumnHandle> columnHandles)
+    private static ImmutableMap<String, Integer> indexColumns(List<ColumnHandle> columnHandles)
     {
         ImmutableMap.Builder<String, Integer> index = ImmutableMap.builder();
         int i = 0;
-        for (ConnectorColumnHandle columnHandle : columnHandles) {
+        for (ColumnHandle columnHandle : columnHandles) {
             HiveColumnHandle hiveColumnHandle = checkType(columnHandle, HiveColumnHandle.class, "columnHandle");
             index.put(hiveColumnHandle.getName(), i);
             i++;

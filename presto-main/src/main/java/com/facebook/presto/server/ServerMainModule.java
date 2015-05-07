@@ -35,6 +35,13 @@ import com.facebook.presto.execution.TaskManagerConfig;
 import com.facebook.presto.failureDetector.FailureDetector;
 import com.facebook.presto.failureDetector.FailureDetectorModule;
 import com.facebook.presto.index.IndexManager;
+import com.facebook.presto.memory.ClusterMemoryManager;
+import com.facebook.presto.memory.ForMemoryManager;
+import com.facebook.presto.memory.LocalMemoryManager;
+import com.facebook.presto.memory.MemoryInfo;
+import com.facebook.presto.memory.MemoryManagerConfig;
+import com.facebook.presto.memory.MemoryResource;
+import com.facebook.presto.memory.ReservedSystemMemoryConfig;
 import com.facebook.presto.metadata.CatalogManager;
 import com.facebook.presto.metadata.CatalogManagerConfig;
 import com.facebook.presto.metadata.HandleJsonModule;
@@ -54,10 +61,6 @@ import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.PageSorter;
 import com.facebook.presto.spi.block.BlockEncodingFactory;
 import com.facebook.presto.spi.block.BlockEncodingSerde;
-import com.facebook.presto.spi.block.FixedWidthBlockEncoding;
-import com.facebook.presto.spi.block.LazySliceArrayBlockEncoding;
-import com.facebook.presto.spi.block.SliceArrayBlockEncoding;
-import com.facebook.presto.spi.block.VariableWidthBlockEncoding;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.split.PageSinkManager;
@@ -85,7 +88,6 @@ import com.google.inject.Provides;
 import com.google.inject.Scopes;
 import com.google.inject.TypeLiteral;
 import com.google.inject.multibindings.MapBinder;
-import com.google.inject.multibindings.Multibinder;
 import io.airlift.configuration.AbstractConfigurationAwareModule;
 import io.airlift.discovery.client.ServiceDescriptor;
 import io.airlift.slice.Slice;
@@ -144,6 +146,12 @@ public class ServerMainModule
         // task execution
         jaxrsBinder(binder).bind(TaskResource.class);
         binder.bind(TaskManager.class).to(SqlTaskManager.class).in(Scopes.SINGLETON);
+        bindConfig(binder).to(MemoryManagerConfig.class);
+        bindConfig(binder).to(ReservedSystemMemoryConfig.class);
+        newExporter(binder).export(ClusterMemoryManager.class).withGeneratedName();
+        binder.bind(ClusterMemoryManager.class).in(Scopes.SINGLETON);
+        binder.bind(LocalMemoryManager.class).in(Scopes.SINGLETON);
+        newExporter(binder).export(LocalMemoryManager.class).withGeneratedName();
         newExporter(binder).export(TaskManager.class).withGeneratedName();
         binder.bind(TaskExecutor.class).in(Scopes.SINGLETON);
         newExporter(binder).export(TaskExecutor.class).withGeneratedName();
@@ -172,6 +180,11 @@ public class ServerMainModule
         binder.bind(RemoteTaskFactory.class).to(HttpRemoteTaskFactory.class).in(Scopes.SINGLETON);
         newExporter(binder).export(RemoteTaskFactory.class).withGeneratedName();
         httpClientBinder(binder).bindHttpClient("scheduler", ForScheduler.class).withTracing();
+
+        // memory manager
+        jaxrsBinder(binder).bind(MemoryResource.class);
+        httpClientBinder(binder).bindHttpClient("memoryManager", ForMemoryManager.class).withTracing();
+        jsonCodecBinder(binder).bindJsonCodec(MemoryInfo.class);
 
         // data stream provider
         binder.bind(PageSourceManager.class).in(Scopes.SINGLETON);
@@ -265,11 +278,7 @@ public class ServerMainModule
         // block encodings
         binder.bind(BlockEncodingManager.class).in(Scopes.SINGLETON);
         binder.bind(BlockEncodingSerde.class).to(BlockEncodingManager.class).in(Scopes.SINGLETON);
-        Multibinder<BlockEncodingFactory<?>> blockEncodingFactoryBinder = newSetBinder(binder, new TypeLiteral<BlockEncodingFactory<?>>() {});
-        blockEncodingFactoryBinder.addBinding().toInstance(VariableWidthBlockEncoding.FACTORY);
-        blockEncodingFactoryBinder.addBinding().toInstance(FixedWidthBlockEncoding.FACTORY);
-        blockEncodingFactoryBinder.addBinding().toInstance(SliceArrayBlockEncoding.FACTORY);
-        blockEncodingFactoryBinder.addBinding().toInstance(LazySliceArrayBlockEncoding.FACTORY);
+        newSetBinder(binder, new TypeLiteral<BlockEncodingFactory<?>>() {});
 
         // thread visualizer
         jaxrsBinder(binder).bind(ThreadResource.class);

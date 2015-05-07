@@ -50,13 +50,15 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static com.facebook.presto.OutputBuffers.INITIAL_EMPTY_OUTPUT_BUFFERS;
+import static com.facebook.presto.SystemSessionProperties.getHashPartitionCount;
 import static com.facebook.presto.SystemSessionProperties.isBigQueryEnabled;
+import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.facebook.presto.spi.StandardErrorCode.USER_CANCELED;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 @ThreadSafe
-public class SqlQueryExecution
+public final class SqlQueryExecution
         implements QueryExecution
 {
     private static final OutputBuffers ROOT_OUTPUT_BUFFERS = INITIAL_EMPTY_OUTPUT_BUFFERS
@@ -80,6 +82,7 @@ public class SqlQueryExecution
 
     private final QueryExplainer queryExplainer;
     private final AtomicReference<SqlStageExecution> outputStage = new AtomicReference<>();
+    private final AtomicReference<QueryInfo> finalQueryInfo = new AtomicReference<>();
     private final NodeTaskMap nodeTaskMap;
 
     public SqlQueryExecution(QueryId queryId,
@@ -125,6 +128,14 @@ public class SqlQueryExecution
             checkNotNull(session, "session is null");
             checkNotNull(self, "self is null");
             this.stateMachine = new QueryStateMachine(queryId, query, session, self, queryExecutor);
+
+            // when the query finishes cache the final query info, and clear the reference to the output stage
+            stateMachine.addStateChangeListener(state -> {
+                if (state.isDone() && finalQueryInfo.get() == null) {
+                    finalQueryInfo.compareAndSet(null, getQueryInfo());
+                    outputStage.set(null);
+                }
+            });
 
             this.queryExplainer = new QueryExplainer(session, planOptimizers, metadata, sqlParser, experimentalSyntaxEnabled);
         }
@@ -184,7 +195,7 @@ public class SqlQueryExecution
             return doAnalyzeQuery();
         }
         catch (StackOverflowError e) {
-            throw new RuntimeException("statement is too large (stack overflow during analysis)", e);
+            throw new PrestoException(NOT_SUPPORTED, "statement is too large (stack overflow during analysis)", e);
         }
     }
 
@@ -252,7 +263,7 @@ public class SqlQueryExecution
         stateMachine.recordDistributedPlanningTime(distributedPlanningStart);
 
         // update state in case output finished before listener was added
-        doUpdateState(outputStage.getStageInfo());
+        doUpdateState(outputStage.getState());
     }
 
     @Override
@@ -307,7 +318,16 @@ public class SqlQueryExecution
     public QueryInfo getQueryInfo()
     {
         try (SetThreadName ignored = new SetThreadName("Query-%s", stateMachine.getQueryId())) {
+            // acquire reference to outputStage before checking finalQueryInfo, because
+            // state change listener sets finalQueryInfo and then clears outputStage when
+            // the query finishes.
             SqlStageExecution outputStage = this.outputStage.get();
+
+            QueryInfo finalQueryInfo = this.finalQueryInfo.get();
+            if (finalQueryInfo != null) {
+                return finalQueryInfo;
+            }
+
             StageInfo stageInfo = null;
             if (outputStage != null) {
                 stageInfo = outputStage.getStageInfo();
@@ -316,7 +336,7 @@ public class SqlQueryExecution
         }
     }
 
-    private void doUpdateState(StageInfo outputStageInfo)
+    private void doUpdateState(StageState outputStageState)
     {
         // if already complete, just return
         if (stateMachine.isDone()) {
@@ -324,10 +344,9 @@ public class SqlQueryExecution
         }
 
         // if output stage is done, transition to done
-        StageState outputStageState = outputStageInfo.getState();
         if (outputStageState.isDone()) {
             if (outputStageState.isFailure()) {
-                stateMachine.fail(failureCause(outputStageInfo));
+                stateMachine.fail(failureCause(outputStage.get().getStageInfo()));
             }
             else if (outputStageState == StageState.CANCELED) {
                 stateMachine.fail(new PrestoException(USER_CANCELED, "Query was canceled"));
@@ -338,7 +357,7 @@ public class SqlQueryExecution
         }
         else if (stateMachine.getQueryState() == QueryState.STARTING) {
             // if output stage has at least one task, we are running
-            if (!outputStageInfo.getTasks().isEmpty()) {
+            if (!outputStage.get().getStageInfo().getTasks().isEmpty()) {
                 stateMachine.running();
                 stateMachine.recordExecutionStart();
             }
@@ -422,18 +441,12 @@ public class SqlQueryExecution
         @Override
         public SqlQueryExecution createQueryExecution(QueryId queryId, String query, Session session, Statement statement)
         {
-            int initialHashPartitions;
+            int initialHashPartitions = this.initialHashPartitions;
             if (isBigQueryEnabled(session, false)) {
-                if (this.bigQueryInitialHashPartitions == null) {
-                    initialHashPartitions = nodeManager.getActiveNodes().size();
-                }
-                else {
-                    initialHashPartitions = this.bigQueryInitialHashPartitions;
-                }
+                initialHashPartitions = (bigQueryInitialHashPartitions == null) ? nodeManager.getActiveNodes().size() : bigQueryInitialHashPartitions;
             }
-            else {
-                initialHashPartitions = this.initialHashPartitions;
-            }
+            initialHashPartitions = getHashPartitionCount(session, initialHashPartitions);
+
             SqlQueryExecution queryExecution = new SqlQueryExecution(queryId,
                     query,
                     session,
