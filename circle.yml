@@ -5,7 +5,7 @@ machine:
   java:
     version: oraclejdk8
   environment:
-    MAVEN_OPTS: -Xmx3g
+    MAVEN_OPTS: -Xmx6g
     M2_HOME: $HOME/.m2/apache-maven-3.2.5  # .m2 is cached
     M2:      $HOME/.m2/apache-maven-3.2.5/bin
     PATH:    $HOME/.m2/apache-maven-3.2.5/bin:$PATH
@@ -23,8 +23,9 @@ dependencies:
 
 test:
   override:
-    # Do nothing since Presto tests cannot be finished under 4GB memory limit of CircleCI
-    - echo skip tests
+    # Currently CircleCI provides us 8GB container, so mvn test will work. 
+    # Running tests only in master branch
+    - if [ "$CIRCLE_BRANCH" = "master" ]; then rake test; fi
 
 deployment:
   all:
