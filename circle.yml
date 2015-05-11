@@ -23,8 +23,9 @@ dependencies:
 
 test:
   override:
-    # Currently CircleCI provides us 8GB container, so mvn test will work
-    - rake test
+    # Currently CircleCI provides us 8GB container, so mvn test will work. 
+    # Running tests only in master branch
+    - if [ "$CIRCLE_BRANCH" = "master" ]; then rake test; fi
 
 deployment:
   all:
