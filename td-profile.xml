@@ -21,7 +21,7 @@
   </build>
   <properties>
     <air.test.jvmsize>4g</air.test.jvmsize>
-  <properties>
+  </properties>
   <distributionManagement>
     <repository>
       <id>td-maven-repository</id>
