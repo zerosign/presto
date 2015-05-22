@@ -123,14 +123,12 @@ public class SharedBuffer
         }
     }
 
-    private final long maxBufferedBytes;
-
     private final SettableFuture<OutputBuffers> finalOutputBuffers = SettableFuture.create();
 
     @GuardedBy("this")
     private OutputBuffers outputBuffers = INITIAL_EMPTY_OUTPUT_BUFFERS;
     @GuardedBy("this")
-    private final Map<Integer, PartitionBuffer> partitionToPageBuffer = new ConcurrentHashMap<>();
+    private final Map<Integer, PartitionBuffer> partitionBuffers = new ConcurrentHashMap<>();
     @GuardedBy("this")
     private final Map<Integer, Set<NamedBuffer>> partitionToNamedBuffer = new ConcurrentHashMap<>();
     @GuardedBy("this")
@@ -143,6 +141,8 @@ public class SharedBuffer
     @GuardedBy("this")
     private final List<GetBufferResult> stateChangeListeners = new ArrayList<>();
 
+    private final SharedBufferMemoryManager memoryManager;
+
     public SharedBuffer(TaskId taskId, Executor executor, DataSize maxBufferSize)
     {
         checkNotNull(taskId, "taskId is null");
@@ -151,7 +151,7 @@ public class SharedBuffer
 
         checkNotNull(maxBufferSize, "maxBufferSize is null");
         checkArgument(maxBufferSize.toBytes() > 0, "maxBufferSize must be at least 1");
-        this.maxBufferedBytes = maxBufferSize.toBytes();
+        this.memoryManager = new SharedBufferMemoryManager(maxBufferSize.toBytes());
     }
 
     public void addStateChangeListener(StateChangeListener<BufferState> stateChangeListener)
@@ -176,10 +176,10 @@ public class SharedBuffer
             infos.add(namedBuffer.getInfo());
         }
 
-        long totalBufferedBytes = partitionToPageBuffer.values().stream().mapToLong(PartitionBuffer::getBufferedBytes).sum();
-        long totalBufferedPages = partitionToPageBuffer.values().stream().mapToLong(PartitionBuffer::getBufferedPageCount).sum();
-        long totalQueuedPages = partitionToPageBuffer.values().stream().mapToLong(PartitionBuffer::getQueuedPageCount).sum();
-        long totalPagesSent = partitionToPageBuffer.values().stream().mapToLong(PartitionBuffer::getPageCount).sum();
+        long totalBufferedBytes = partitionBuffers.values().stream().mapToLong(PartitionBuffer::getBufferedBytes).sum();
+        long totalBufferedPages = partitionBuffers.values().stream().mapToLong(PartitionBuffer::getBufferedPageCount).sum();
+        long totalQueuedPages = partitionBuffers.values().stream().mapToLong(PartitionBuffer::getQueuedPageCount).sum();
+        long totalPagesSent = partitionBuffers.values().stream().mapToLong(PartitionBuffer::getPageCount).sum();
 
         return new SharedBufferInfo(state, state.canAddBuffers(), state.canAddPages(), totalBufferedBytes, totalBufferedPages, totalQueuedPages, totalPagesSent, infos.build());
     }
@@ -210,18 +210,19 @@ public class SharedBuffer
             if (!namedBuffers.containsKey(bufferId)) {
                 checkState(state.get().canAddBuffers(), "Cannot add buffers to %s", SharedBuffer.class.getSimpleName());
                 PagePartitionFunction partitionFunction = entry.getValue();
+
                 int partition = 0;
                 if (partitionFunction instanceof HashPagePartitionFunction) {
                     partition = ((HashPagePartitionFunction) partitionFunction).getPartition();
                 }
-                int finalPartition = partition;
-                PartitionBuffer partitionBuffer = partitionToPageBuffer.computeIfAbsent(partition, k -> new PartitionBuffer(finalPartition, maxBufferedBytes));
+
+                PartitionBuffer partitionBuffer = createOrGetPartitionBuffer(partition);
                 NamedBuffer namedBuffer = new NamedBuffer(bufferId, partitionBuffer);
+
                 // the buffer may have been aborted before the creation message was received
                 if (abortedBuffers.contains(bufferId)) {
                     namedBuffer.abort();
                 }
-
                 namedBuffers.put(bufferId, namedBuffer);
                 Set<NamedBuffer> namedBuffers = partitionToNamedBuffer.computeIfAbsent(partition, k -> new HashSet<>());
                 namedBuffers.add(namedBuffer);
@@ -236,6 +237,12 @@ public class SharedBuffer
         }
 
         updateState();
+    }
+
+    private PartitionBuffer createOrGetPartitionBuffer(int partition)
+    {
+        checkState(Thread.holdsLock(this), "Thread must hold a lock on the %s", SharedBuffer.class.getSimpleName());
+        return partitionBuffers.computeIfAbsent(partition, k -> new PartitionBuffer(partition, memoryManager));
     }
 
     public synchronized ListenableFuture<?> enqueue(Page page)
@@ -253,7 +260,7 @@ public class SharedBuffer
             return immediateFuture(true);
         }
 
-        PartitionBuffer partitionBuffer = partitionToPageBuffer.computeIfAbsent(partition, k -> new PartitionBuffer(partition, maxBufferedBytes));
+        PartitionBuffer partitionBuffer = createOrGetPartitionBuffer(partition);
         ListenableFuture<?> result = partitionBuffer.enqueuePage(page);
         processPendingReads();
         updateState();
@@ -312,7 +319,7 @@ public class SharedBuffer
 
         state.set(FINISHED);
 
-        partitionToPageBuffer.values().forEach(PartitionBuffer::destroy);
+        partitionBuffers.values().forEach(PartitionBuffer::destroy);
         // free readers
         namedBuffers.values().forEach(SharedBuffer.NamedBuffer::abort);
         processPendingReads();
@@ -329,7 +336,7 @@ public class SharedBuffer
         }
 
         state.set(FAILED);
-        partitionToPageBuffer.values().forEach(PartitionBuffer::destroy);
+        partitionBuffers.values().forEach(PartitionBuffer::destroy);
 
         // DO NOT free readers
     }
@@ -364,18 +371,18 @@ public class SharedBuffer
 
             if (!state.canAddPages()) {
                 // discard queued pages (not officially in the buffer)
-                partitionToPageBuffer.values().forEach(PartitionBuffer::clearQueue);
+                partitionBuffers.values().forEach(PartitionBuffer::clearQueue);
             }
 
             // advanced master queue
             if (!state.canAddBuffers() && !namedBuffers.isEmpty()) {
                 for (Map.Entry<Integer, Set<NamedBuffer>> entry : partitionToNamedBuffer.entrySet()) {
-                    PartitionBuffer partitionBuffer = partitionToPageBuffer.get(entry.getKey());
+                    PartitionBuffer partitionBuffer = partitionBuffers.get(entry.getKey());
                     long newMasterSequenceId = entry.getValue().stream()
                             .mapToLong(NamedBuffer::getSequenceId)
                             .min()
                             .getAsLong();
-                    partitionToPageBuffer.get(entry.getKey()).advanceSequenceId(newMasterSequenceId);
+                    partitionBuffers.get(entry.getKey()).advanceSequenceId(newMasterSequenceId);
                     partitionBuffer.advanceSequenceId(newMasterSequenceId);
                 }
             }
