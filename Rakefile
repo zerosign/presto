@@ -32,7 +32,7 @@ end
 desc "compile codes"
 task "compile" do
   target_modules = presto_modules.keep_if{|m| m != 'presto-docs'}
-  sh "mvn test-compile package -pl #{target_modules.join(",")} -DskipTests"
+  sh "mvn test-compile -pl #{target_modules.join(",")} -DskipTests"
 end
 
 desc "run tests"
