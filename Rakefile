@@ -9,7 +9,7 @@ EXCLUDE_MODULES = %w|
  presto-cassandra presto-kafka presto-docs
  presto-mysql presto-postgresql presto-hive
  presto-hive-hadoop1 presto-hive-hadoop2
- presto-hive-cdh4 presto-hive-cdh5|
+ presto-hive-cdh4 presto-hive-cdh5 presto-raptor|
 
 EXCLUDE_FROM_COMPILE = %w|presto-docs presto-server-rpm|
 
