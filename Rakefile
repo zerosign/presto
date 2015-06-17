@@ -11,6 +11,8 @@ EXCLUDE_MODULES = %w|
  presto-hive-hadoop1 presto-hive-hadoop2
  presto-hive-cdh4 presto-hive-cdh5|
 
+EXCLUDE_FROM_COMPILE = %w|presto-docs presto-server-rpm|
+
 def presto_modules
   require "rexml/document"
   pom = REXML::Document.new(File.read("pom.xml"))
@@ -29,10 +31,13 @@ def active_modules
   modules
 end
 
+def compile_target_modules
+  presto_modules.keep_if{|m| !EXCLUDE_FROM_COMPILE.include?(m) }
+end
+
 desc "compile codes"
 task "compile" do
-  target_modules = presto_modules.keep_if{|m| m != 'presto-docs'}
-  sh "mvn test-compile -pl #{target_modules.join(",")} -DskipTests"
+  sh "mvn test-compile -pl #{compile_target_modules.join(",")} -DskipTests"
 end
 
 desc "run tests"
@@ -87,7 +92,6 @@ task "deploy" do
   # Deploy
   # Deploy presto-root
   sh "mvn deploy -P td -N -DskipTests"
-  target_modules = presto_modules.keep_if{|m| m != 'presto-docs'}
   # Deploy presot modules
-  sh "mvn deploy -P td -pl #{target_modules.join(",")} -DskipTests"
+  sh "mvn deploy -P td -pl #{compile_target_modules.join(",")} -DskipTests"
 end
