@@ -53,7 +53,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static com.facebook.presto.OutputBuffers.INITIAL_EMPTY_OUTPUT_BUFFERS;
 import static com.facebook.presto.SystemSessionProperties.getHashPartitionCount;
-import static com.facebook.presto.SystemSessionProperties.isBigQueryEnabled;
 import static com.facebook.presto.spi.StandardErrorCode.INTERNAL_ERROR;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.facebook.presto.spi.StandardErrorCode.USER_CANCELED;
@@ -315,18 +314,18 @@ public final class SqlQueryExecution
                 if (stateMachine.isDone()) {
                     return;
                 }
-                if (stateMachine.getQueryState() == QueryState.STARTING) {
-                    // if any stage has at least one task, we are running
-                    if (!stage.getStageInfo().getTasks().isEmpty()) {
-                        stateMachine.transitionToRunning();
-                    }
-                }
-                else if (state == StageState.FAILED) {
+                if (state == StageState.FAILED) {
                     stateMachine.transitionToFailed(stage.getStageInfo().getFailureCause().toException());
                 }
                 else if (state == StageState.ABORTED) {
                     // this should never happen, since abort can only be triggered in query clean up after the query is finished
                     stateMachine.transitionToFailed(new PrestoException(INTERNAL_ERROR, "Query stage was aborted"));
+                }
+                else if (stateMachine.getQueryState() == QueryState.STARTING) {
+                    // if any stage has at least one task, we are running
+                    if (!stage.getStageInfo().getTasks().isEmpty()) {
+                        stateMachine.transitionToRunning();
+                    }
                 }
             });
         }
@@ -484,7 +483,6 @@ public final class SqlQueryExecution
     {
         private final int scheduleSplitBatchSize;
         private final int initialHashPartitions;
-        private final Integer bigQueryInitialHashPartitions;
         private final boolean experimentalSyntaxEnabled;
         private final Metadata metadata;
         private final SqlParser sqlParser;
@@ -514,7 +512,6 @@ public final class SqlQueryExecution
             checkNotNull(config, "config is null");
             this.scheduleSplitBatchSize = config.getScheduleSplitBatchSize();
             this.initialHashPartitions = config.getInitialHashPartitions();
-            this.bigQueryInitialHashPartitions = config.getBigQueryInitialHashPartitions();
             this.metadata = checkNotNull(metadata, "metadata is null");
             this.sqlParser = checkNotNull(sqlParser, "sqlParser is null");
             this.locationFactory = checkNotNull(locationFactory, "locationFactory is null");
@@ -532,13 +529,7 @@ public final class SqlQueryExecution
         @Override
         public SqlQueryExecution createQueryExecution(QueryId queryId, String query, Session session, Statement statement)
         {
-            int initialHashPartitions = this.initialHashPartitions;
-            if (isBigQueryEnabled(session, false)) {
-                initialHashPartitions = (bigQueryInitialHashPartitions == null) ? nodeManager.getActiveNodes().size() : bigQueryInitialHashPartitions;
-            }
-            initialHashPartitions = getHashPartitionCount(session, initialHashPartitions);
-
-            SqlQueryExecution queryExecution = new SqlQueryExecution(queryId,
+            return new SqlQueryExecution(queryId,
                     query,
                     session,
                     locationFactory.createQueryLocation(queryId),
@@ -551,12 +542,10 @@ public final class SqlQueryExecution
                     remoteTaskFactory,
                     locationFactory,
                     scheduleSplitBatchSize,
-                    initialHashPartitions,
+                    getHashPartitionCount(session, this.initialHashPartitions),
                     experimentalSyntaxEnabled,
                     executor,
                     nodeTaskMap);
-
-            return queryExecution;
         }
     }
 }
