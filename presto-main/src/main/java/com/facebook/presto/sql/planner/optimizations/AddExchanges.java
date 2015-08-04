@@ -117,24 +117,20 @@ public class AddExchanges
     private final SqlParser parser;
     private final Metadata metadata;
     private final boolean distributedIndexJoins;
-    private final boolean distributedJoins;
-    private final boolean redistributeWrites;
 
-    public AddExchanges(Metadata metadata, SqlParser parser, boolean distributedIndexJoins, boolean distributedJoins, boolean redistributeWrites)
+    public AddExchanges(Metadata metadata, SqlParser parser, boolean distributedIndexJoins)
     {
         this.metadata = metadata;
         this.parser = parser;
         this.distributedIndexJoins = distributedIndexJoins;
-        this.distributedJoins = distributedJoins;
-        this.redistributeWrites = redistributeWrites;
     }
 
     @Override
     public PlanNode optimize(PlanNode plan, Session session, Map<Symbol, Type> types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator)
     {
-        boolean distributedJoinEnabled = SystemSessionProperties.isDistributedJoinEnabled(session, distributedJoins);
-        boolean redistributeWrites = SystemSessionProperties.isRedistributeWrites(session, this.redistributeWrites);
-        boolean preferStreamingOperators = SystemSessionProperties.preferStreamingOperators(session, false);
+        boolean distributedJoinEnabled = SystemSessionProperties.isDistributedJoinEnabled(session);
+        boolean redistributeWrites = SystemSessionProperties.isRedistributeWrites(session);
+        boolean preferStreamingOperators = SystemSessionProperties.preferStreamingOperators(session);
         PlanWithProperties result = plan.accept(new Rewriter(symbolAllocator, idAllocator, symbolAllocator, session, distributedIndexJoins, distributedJoinEnabled, preferStreamingOperators, redistributeWrites), new Context(PreferredProperties.any(), false));
         return result.getNode();
     }
@@ -615,7 +611,7 @@ public class AddExchanges
 
             // Layouts will be returned in order of the connector's preference
             List<TableLayoutResult> layouts = metadata.getLayouts(
-                    node.getTable(),
+                    session, node.getTable(),
                     new Constraint<>(simplifiedConstraint, bindings -> !shouldPrune(constraint, node.getAssignments(), bindings)),
                     Optional.of(node.getOutputSymbols().stream()
                             .map(node.getAssignments()::get)

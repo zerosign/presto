@@ -198,8 +198,6 @@ public class LocalExecutionPlanner
     private final DataSize maxIndexMemorySize;
     private final IndexJoinLookupStats indexJoinLookupStats;
     private final DataSize maxPartialAggregationMemorySize;
-    private final int writerCount;
-    private final int defaultConcurrency;
 
     @Inject
     public LocalExecutionPlanner(
@@ -225,8 +223,6 @@ public class LocalExecutionPlanner
         this.indexJoinLookupStats = checkNotNull(indexJoinLookupStats, "indexJoinLookupStats is null");
         this.maxIndexMemorySize = checkNotNull(taskManagerConfig, "taskManagerConfig is null").getMaxTaskIndexMemoryUsage();
         this.maxPartialAggregationMemorySize = taskManagerConfig.getMaxPartialAggregationMemoryUsage();
-        this.writerCount = taskManagerConfig.getWriterCount();
-        this.defaultConcurrency = taskManagerConfig.getTaskDefaultConcurrency();
 
         interpreterEnabled = compilerConfig.isInterpreterEnabled();
     }
@@ -688,7 +684,7 @@ public class LocalExecutionPlanner
                 return planGlobalAggregation(context.getNextOperatorId(), node, source);
             }
 
-            int aggregationConcurrency = getTaskAggregationConcurrency(session, defaultConcurrency);
+            int aggregationConcurrency = getTaskAggregationConcurrency(session);
             if (node.getStep() == Step.PARTIAL || !context.isAllowLocalParallel() || context.getDriverInstanceCount() > 1 || aggregationConcurrency <= 1) {
                 PhysicalOperation source = node.getSource().accept(this, context);
                 return planGroupByAggregation(node, source, context, Optional.empty());
@@ -1112,7 +1108,7 @@ public class LocalExecutionPlanner
             List<Integer> remappedProbeKeyChannels = remappedProbeKeyChannelsBuilder.build();
             Function<RecordSet, RecordSet> probeKeyNormalizer = recordSet -> {
                 if (!overlappingFieldSets.isEmpty()) {
-                    recordSet = new FieldSetFilteringRecordSet(recordSet, overlappingFieldSets);
+                    recordSet = new FieldSetFilteringRecordSet(metadata.getFunctionRegistry(), recordSet, overlappingFieldSets);
                 }
                 return new MappedRecordSet(recordSet, remappedProbeKeyChannels);
             };
@@ -1120,7 +1116,7 @@ public class LocalExecutionPlanner
             // Declare the input and output schemas for the index and acquire the actual Index
             List<ColumnHandle> lookupSchema = Lists.transform(lookupSymbolSchema, forMap(node.getAssignments()));
             List<ColumnHandle> outputSchema = Lists.transform(node.getOutputSymbols(), forMap(node.getAssignments()));
-            ConnectorIndex index = indexManager.getIndex(node.getIndexHandle(), lookupSchema, outputSchema);
+            ConnectorIndex index = indexManager.getIndex(session, node.getIndexHandle(), lookupSchema, outputSchema);
 
             List<Type> types = getSourceOperatorTypes(node, context.getTypes());
             OperatorFactory operatorFactory = new IndexSourceOperator.IndexSourceOperatorFactory(context.getNextOperatorId(), node.getId(), index, types, probeKeyNormalizer);
@@ -1281,7 +1277,7 @@ public class LocalExecutionPlanner
             // Plan probe and introduce a projection to put all fields from the probe side into a single channel if necessary
             PhysicalOperation probeSource;
             LocalExecutionPlanContext parallelParentContext = null;
-            int joinConcurrency = getTaskJoinConcurrency(session, defaultConcurrency);
+            int joinConcurrency = getTaskJoinConcurrency(session);
             // currently we can not run joins with an outer build in parallel
             if (!isBuildOuter(node) && context.isAllowLocalParallel() && context.getDriverInstanceCount() == 1 && joinConcurrency > 1) {
                 parallelParentContext = context;
@@ -1302,7 +1298,7 @@ public class LocalExecutionPlanner
             Optional<Integer> buildHashChannel = buildHashSymbol.map(channelGetter(buildSource));
 
             LookupSourceSupplier lookupSourceSupplier;
-            int hashBuildConcurrency = getTaskHashBuildConcurrency(session, defaultConcurrency);
+            int hashBuildConcurrency = getTaskHashBuildConcurrency(session);
             if (isBuildOuter(node) || hashBuildConcurrency <= 1) {
                 HashBuilderOperatorFactory hashBuilderOperatorFactory = new HashBuilderOperatorFactory(
                         buildContext.getNextOperatorId(),
@@ -1404,7 +1400,7 @@ public class LocalExecutionPlanner
             // introduce a projection to put all fields from the probe side into a single channel if necessary
             PhysicalOperation probeSource;
             LocalExecutionPlanContext parallelParentContext = null;
-            int joinConcurrency = getTaskJoinConcurrency(session, defaultConcurrency);
+            int joinConcurrency = getTaskJoinConcurrency(session);
             if (context.isAllowLocalParallel() && context.getDriverInstanceCount() == 1 && joinConcurrency > 1) {
                 parallelParentContext = context;
                 context = context.createSubContext();
@@ -1461,13 +1457,14 @@ public class LocalExecutionPlanner
             Optional<Integer> sampleWeightChannel = node.getSampleWeightSymbol().map(exchange::symbolToChannel);
 
             // Set table writer count
-            context.setDriverInstanceCount(getTaskWriterCount(session, writerCount));
+            context.setDriverInstanceCount(getTaskWriterCount(session));
 
             List<Integer> inputChannels = node.getColumns().stream()
                     .map(exchange::symbolToChannel)
                     .collect(toImmutableList());
 
-            OperatorFactory operatorFactory = new TableWriterOperatorFactory(context.getNextOperatorId(), pageSinkManager, node.getTarget(), inputChannels, sampleWeightChannel);
+            OperatorFactory operatorFactory = new TableWriterOperatorFactory(context.getNextOperatorId(), pageSinkManager, node.getTarget(), inputChannels, sampleWeightChannel,
+                    session);
 
             Map<Symbol, Integer> layout = ImmutableMap.<Symbol, Integer>builder()
                     .put(node.getOutputSymbols().get(0), 0)
@@ -1513,7 +1510,7 @@ public class LocalExecutionPlanner
         {
             PhysicalOperation source = node.getSource().accept(this, context);
 
-            OperatorFactory operatorFactory = new TableCommitOperatorFactory(context.getNextOperatorId(), createTableCommitter(node, metadata));
+            OperatorFactory operatorFactory = new TableCommitOperatorFactory(context.getNextOperatorId(), createTableCommitter(session, node, metadata));
             Map<Symbol, Integer> layout = ImmutableMap.of(node.getOutputSymbols().get(0), 0);
 
             return new PhysicalOperation(operatorFactory, layout, source);
@@ -1709,7 +1706,7 @@ public class LocalExecutionPlanner
         return builder.build();
     }
 
-    private static TableCommitter createTableCommitter(TableCommitNode node, Metadata metadata)
+    private static TableCommitter createTableCommitter(Session session, TableCommitNode node, Metadata metadata)
     {
         WriterTarget target = node.getTarget();
         return new TableCommitter()
@@ -1718,13 +1715,13 @@ public class LocalExecutionPlanner
             public void commitTable(Collection<Slice> fragments)
             {
                 if (target instanceof CreateHandle) {
-                    metadata.commitCreateTable(((CreateHandle) target).getHandle(), fragments);
+                    metadata.commitCreateTable(session, ((CreateHandle) target).getHandle(), fragments);
                 }
                 else if (target instanceof InsertHandle) {
-                    metadata.commitInsert(((InsertHandle) target).getHandle(), fragments);
+                    metadata.commitInsert(session, ((InsertHandle) target).getHandle(), fragments);
                 }
                 else if (target instanceof DeleteHandle) {
-                    metadata.commitDelete(((DeleteHandle) target).getHandle(), fragments);
+                    metadata.commitDelete(session, ((DeleteHandle) target).getHandle(), fragments);
                 }
                 else {
                     throw new AssertionError("Unhandled target type: " + target.getClass().getName());
@@ -1735,13 +1732,13 @@ public class LocalExecutionPlanner
             public void rollbackTable()
             {
                 if (target instanceof CreateHandle) {
-                    metadata.rollbackCreateTable(((CreateHandle) target).getHandle());
+                    metadata.rollbackCreateTable(session, ((CreateHandle) target).getHandle());
                 }
                 else if (target instanceof InsertHandle) {
-                    metadata.rollbackInsert(((InsertHandle) target).getHandle());
+                    metadata.rollbackInsert(session, ((InsertHandle) target).getHandle());
                 }
                 else if (target instanceof DeleteHandle) {
-                    metadata.rollbackDelete(((DeleteHandle) target).getHandle());
+                    metadata.rollbackDelete(session, ((DeleteHandle) target).getHandle());
                 }
                 else {
                     throw new AssertionError("Unhandled target type: " + target.getClass().getName());

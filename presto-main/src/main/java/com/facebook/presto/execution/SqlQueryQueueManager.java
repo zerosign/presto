@@ -152,7 +152,7 @@ public class SqlQueryQueueManager
     @Override
     public boolean submit(QueryExecution queryExecution, Executor executor, SqlQueryManagerStats stats)
     {
-        List<QueryQueue> queues = selectQueues(queryExecution.getQueryInfo().getSession(), executor);
+        List<QueryQueue> queues = selectQueues(queryExecution.getSession(), executor);
 
         for (QueryQueue queue : queues) {
             if (!queue.reserve(queryExecution)) {

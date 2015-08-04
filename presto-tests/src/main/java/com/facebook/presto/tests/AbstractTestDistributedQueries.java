@@ -19,16 +19,21 @@ import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.MaterializedRow;
 import com.facebook.presto.testing.QueryRunner;
 import com.google.common.base.Joiner;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import org.intellij.lang.annotations.Language;
 import org.testng.annotations.Test;
+
+import java.util.List;
 
 import static com.facebook.presto.connector.informationSchema.InformationSchemaMetadata.INFORMATION_SCHEMA;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.SqlFormatter.formatSql;
 import static com.facebook.presto.testing.MaterializedResult.resultBuilder;
+import static com.facebook.presto.tests.QueryAssertions.assertContains;
+import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.collect.Iterables.transform;
 import static java.lang.String.format;
@@ -36,7 +41,6 @@ import static java.util.Collections.nCopies;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
-import static org.testng.Assert.fail;
 
 public abstract class AbstractTestDistributedQueries
         extends AbstractTestApproximateQueries
@@ -71,26 +75,50 @@ public abstract class AbstractTestDistributedQueries
     public void testSetSession()
             throws Exception
     {
-        MaterializedResult result = computeActual("SET SESSION foo = 'bar'");
+        MaterializedResult result = computeActual("SET SESSION test_string = 'bar'");
         assertTrue((Boolean) getOnlyElement(result).getField(0));
-        assertEquals(result.getSetSessionProperties(), ImmutableMap.of("foo", "bar"));
+        assertEquals(result.getSetSessionProperties(), ImmutableMap.of("test_string", "bar"));
 
-        result = computeActual("SET SESSION foo.bar = 'baz'");
+        result = computeActual("SET SESSION connector.connector_long = 999");
         assertTrue((Boolean) getOnlyElement(result).getField(0));
-        assertEquals(result.getSetSessionProperties(), ImmutableMap.of("foo.bar", "baz"));
+        assertEquals(result.getSetSessionProperties(), ImmutableMap.of("connector.connector_long", "999"));
+
+        result = computeActual("SET SESSION connector.connector_string = 'baz'");
+        assertTrue((Boolean) getOnlyElement(result).getField(0));
+        assertEquals(result.getSetSessionProperties(), ImmutableMap.of("connector.connector_string", "baz"));
+
+        result = computeActual("SET SESSION connector.connector_string = 'ban' || 'ana'");
+        assertTrue((Boolean) getOnlyElement(result).getField(0));
+        assertEquals(result.getSetSessionProperties(), ImmutableMap.of("connector.connector_string", "banana"));
+
+        result = computeActual("SET SESSION connector.connector_long = 444");
+        assertTrue((Boolean) getOnlyElement(result).getField(0));
+        assertEquals(result.getSetSessionProperties(), ImmutableMap.of("connector.connector_long", "444"));
+
+        result = computeActual("SET SESSION connector.connector_long = 111 + 111");
+        assertTrue((Boolean) getOnlyElement(result).getField(0));
+        assertEquals(result.getSetSessionProperties(), ImmutableMap.of("connector.connector_long", "222"));
+
+        result = computeActual("SET SESSION connector.connector_boolean = 111 < 3");
+        assertTrue((Boolean) getOnlyElement(result).getField(0));
+        assertEquals(result.getSetSessionProperties(), ImmutableMap.of("connector.connector_boolean", "false"));
+
+        result = computeActual("SET SESSION connector.connector_double = 11.1");
+        assertTrue((Boolean) getOnlyElement(result).getField(0));
+        assertEquals(result.getSetSessionProperties(), ImmutableMap.of("connector.connector_double", "11.1"));
     }
 
     @Test
     public void testResetSession()
             throws Exception
     {
-        MaterializedResult result = computeActual(getSession(), "RESET SESSION foo");
+        MaterializedResult result = computeActual(getSession(), "RESET SESSION test_string");
         assertTrue((Boolean) getOnlyElement(result).getField(0));
-        assertEquals(result.getResetSessionProperties(), ImmutableSet.of("foo"));
+        assertEquals(result.getResetSessionProperties(), ImmutableSet.of("test_string"));
 
-        result = computeActual(getSession(), "RESET SESSION connector.cheese");
+        result = computeActual(getSession(), "RESET SESSION connector.connector_string");
         assertTrue((Boolean) getOnlyElement(result).getField(0));
-        assertEquals(result.getResetSessionProperties(), ImmutableSet.of("connector.cheese"));
+        assertEquals(result.getResetSessionProperties(), ImmutableSet.of("connector.connector_string"));
     }
 
     @Test
@@ -99,25 +127,18 @@ public abstract class AbstractTestDistributedQueries
     {
         assertQueryTrue("CREATE TABLE test_create (a bigint, b double, c varchar)");
         assertTrue(queryRunner.tableExists(getSession(), "test_create"));
+        assertTableColumnNames("test_create", "a", "b", "c");
 
         assertQueryTrue("DROP TABLE test_create");
         assertFalse(queryRunner.tableExists(getSession(), "test_create"));
-    }
 
-    @Test
-    public void testCreateTableIfNotExists()
-            throws Exception
-    {
         assertQueryTrue("CREATE TABLE test_create_table_if_not_exists (a bigint, b varchar, c double)");
         assertTrue(queryRunner.tableExists(getSession(), "test_create_table_if_not_exists"));
-        MaterializedResult expected = computeActual(
-                "SELECT column_name FROM information_schema.columns WHERE table_name = 'test_create_table_if_not_exists'");
+        assertTableColumnNames("test_create_table_if_not_exists", "a", "b", "c");
 
         assertQueryTrue("CREATE TABLE IF NOT EXISTS test_create_table_if_not_exists (d bigint, e varchar)");
         assertTrue(queryRunner.tableExists(getSession(), "test_create_table_if_not_exists"));
-        MaterializedResult actual = computeActual(
-                "SELECT column_name FROM information_schema.columns WHERE table_name = 'test_create_table_if_not_exists'");
-        assertEquals(expected, actual);
+        assertTableColumnNames("test_create_table_if_not_exists", "a", "b", "c");
 
         assertQueryTrue("DROP TABLE test_create_table_if_not_exists");
         assertFalse(queryRunner.tableExists(getSession(), "test_create_table_if_not_exists"));
@@ -169,8 +190,17 @@ public abstract class AbstractTestDistributedQueries
             throws Exception
     {
         assertQueryTrue("CREATE TABLE test_rename AS SELECT 123 x");
+
         assertQueryTrue("ALTER TABLE test_rename RENAME TO test_rename_new");
-        assertQueryTrue("DROP TABLE test_rename_new");
+        MaterializedResult materializedRows = computeActual("SELECT x FROM test_rename_new");
+        assertEquals(getOnlyElement(materializedRows.getMaterializedRows()).getField(0), 123L);
+
+        // provide new table name in uppercase
+        assertQueryTrue("ALTER TABLE test_rename_new RENAME TO TEST_RENAME");
+        materializedRows = computeActual("SELECT x FROM test_rename");
+        assertEquals(getOnlyElement(materializedRows.getMaterializedRows()).getField(0), 123L);
+
+        assertQueryTrue("DROP TABLE test_rename");
 
         assertFalse(queryRunner.tableExists(getSession(), "test_rename"));
         assertFalse(queryRunner.tableExists(getSession(), "test_rename_new"));
@@ -184,6 +214,10 @@ public abstract class AbstractTestDistributedQueries
 
         assertQueryTrue("ALTER TABLE test_rename_column RENAME COLUMN x TO y");
         MaterializedResult materializedRows = computeActual("SELECT y FROM test_rename_column");
+        assertEquals(getOnlyElement(materializedRows.getMaterializedRows()).getField(0), 123L);
+
+        assertQueryTrue("ALTER TABLE test_rename_column RENAME COLUMN y TO Z");
+        materializedRows = computeActual("SELECT z FROM test_rename_column");
         assertEquals(getOnlyElement(materializedRows.getMaterializedRows()).getField(0), 123L);
 
         assertQueryTrue("DROP TABLE test_rename_column");
@@ -440,7 +474,7 @@ public abstract class AbstractTestDistributedQueries
         MaterializedResult emptySample = computeActual("SELECT orderkey FROM orders TABLESAMPLE SYSTEM (0)");
         MaterializedResult all = computeActual("SELECT orderkey FROM orders");
 
-        assertTrue(all.getMaterializedRows().containsAll(fullSample.getMaterializedRows()));
+        assertContains(all, fullSample);
         assertEquals(emptySample.getMaterializedRows().size(), 0);
     }
 
@@ -453,7 +487,7 @@ public abstract class AbstractTestDistributedQueries
         MaterializedResult all = computeExpected("SELECT * FROM orders", sample.getTypes());
 
         assertTrue(!sample.getMaterializedRows().isEmpty());
-        assertTrue(all.getMaterializedRows().containsAll(sample.getMaterializedRows()));
+        assertContains(all, sample);
     }
 
     @Test
@@ -465,12 +499,13 @@ public abstract class AbstractTestDistributedQueries
         assertQueryTrue("DROP TABLE test_symbol_aliasing");
     }
 
-    private static void assertContains(MaterializedResult actual, MaterializedResult expected)
+    private void assertTableColumnNames(String tableName, String... columnNames)
     {
-        for (MaterializedRow row : expected.getMaterializedRows()) {
-            if (!actual.getMaterializedRows().contains(row)) {
-                fail(format("expected row missing: %s%nActual:%n      %s%nExpected:%n      %s", row, actual, expected));
-            }
-        }
+        MaterializedResult result = computeActual("DESCRIBE " + tableName);
+        List<String> expected = ImmutableList.copyOf(columnNames);
+        List<String> actual = result.getMaterializedRows().stream()
+            .map(row -> (String) row.getField(0))
+            .collect(toImmutableList());
+        assertEquals(actual, expected);
     }
 }
