@@ -58,18 +58,13 @@ public class QueryRunner
         this.httpClient = new JettyHttpClient(
                 getHttpClientConfig(socksProxy, keystorePath, keystorePassword, kerberosPrincipal, kerberosRemoteServiceName, authenticationEnabled),
                 kerberosConfig,
-                com.google.common.base.Optional.<JettyIoPool>absent(),
+                Optional.<JettyIoPool>empty(),
                 ImmutableList.<HttpRequestFilter>of());
     }
 
     public ClientSession getSession()
     {
         return session.get();
-    }
-
-    public HttpClient getHttpClient()
-    {
-        return httpClient;
     }
 
     public void setSession(ClientSession session)
