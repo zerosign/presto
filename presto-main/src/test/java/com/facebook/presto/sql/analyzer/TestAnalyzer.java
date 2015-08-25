@@ -510,6 +510,14 @@ public class TestAnalyzer
     }
 
     @Test
+    public void testInvalidInsert()
+            throws Exception
+    {
+        assertFails(MISSING_TABLE, "INSERT INTO foo VALUES (1)");
+        assertFails(NOT_SUPPORTED, "INSERT INTO v1 VALUES (1)");
+    }
+
+    @Test
     public void testDuplicateWithQuery()
             throws Exception
     {
@@ -758,6 +766,15 @@ public class TestAnalyzer
             throws Exception
     {
         assertFails(INVALID_LITERAL, "SELECT TIMESTAMP '2012-10-31 01:00:00 PT'");
+    }
+
+    @Test
+    public void testInvalidDelete()
+            throws Exception
+    {
+        assertFails(MISSING_TABLE, "DELETE FROM foo");
+        assertFails(NOT_SUPPORTED, "DELETE FROM v1");
+        assertFails(NOT_SUPPORTED, "DELETE FROM v1 WHERE a = 1");
     }
 
     @BeforeMethod(alwaysRun = true)
