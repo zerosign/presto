@@ -13,15 +13,15 @@
  */
 package com.facebook.presto.sql.gen;
 
-import com.facebook.presto.byteCode.Block;
+import com.facebook.presto.byteCode.ByteCodeBlock;
 import com.facebook.presto.byteCode.ByteCodeNode;
 import com.facebook.presto.byteCode.ClassDefinition;
-import com.facebook.presto.byteCode.Scope;
 import com.facebook.presto.byteCode.DynamicClassLoader;
 import com.facebook.presto.byteCode.FieldDefinition;
 import com.facebook.presto.byteCode.MethodDefinition;
 import com.facebook.presto.byteCode.OpCode;
 import com.facebook.presto.byteCode.Parameter;
+import com.facebook.presto.byteCode.Scope;
 import com.facebook.presto.byteCode.Variable;
 import com.facebook.presto.byteCode.control.ForLoop;
 import com.facebook.presto.byteCode.control.IfStatement;
@@ -31,6 +31,7 @@ import com.facebook.presto.operator.InMemoryJoinHash;
 import com.facebook.presto.operator.LookupSource;
 import com.facebook.presto.operator.PagesHashStrategy;
 import com.facebook.presto.spi.PageBuilder;
+import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.type.BigintType;
 import com.facebook.presto.spi.type.Type;
@@ -137,17 +138,17 @@ public class JoinCompiler
         FieldDefinition sizeField = classDefinition.declareField(a(PRIVATE, FINAL), "size", type(long.class));
         List<FieldDefinition> channelFields = new ArrayList<>();
         for (int i = 0; i < types.size(); i++) {
-            FieldDefinition channelField = classDefinition.declareField(a(PRIVATE, FINAL), "channel_" + i, type(List.class, com.facebook.presto.spi.block.Block.class));
+            FieldDefinition channelField = classDefinition.declareField(a(PRIVATE, FINAL), "channel_" + i, type(List.class, Block.class));
             channelFields.add(channelField);
         }
         List<Type> joinChannelTypes = new ArrayList<>();
         List<FieldDefinition> joinChannelFields = new ArrayList<>();
         for (int i = 0; i < joinChannels.size(); i++) {
             joinChannelTypes.add(types.get(joinChannels.get(i)));
-            FieldDefinition channelField = classDefinition.declareField(a(PRIVATE, FINAL), "joinChannel_" + i, type(List.class, com.facebook.presto.spi.block.Block.class));
+            FieldDefinition channelField = classDefinition.declareField(a(PRIVATE, FINAL), "joinChannel_" + i, type(List.class, Block.class));
             joinChannelFields.add(channelField);
         }
-        FieldDefinition hashChannelField = classDefinition.declareField(a(PRIVATE, FINAL), "hashChannel", type(List.class, com.facebook.presto.spi.block.Block.class));
+        FieldDefinition hashChannelField = classDefinition.declareField(a(PRIVATE, FINAL), "hashChannel", type(List.class, Block.class));
 
         generateConstructor(classDefinition, joinChannels, sizeField, channelFields, joinChannelFields, hashChannelField);
         generateGetChannelCountMethod(classDefinition, channelFields);
@@ -162,21 +163,21 @@ public class JoinCompiler
         return defineClass(classDefinition, PagesHashStrategy.class, callSiteBinder.getBindings(), getClass().getClassLoader());
     }
 
-    private void generateConstructor(ClassDefinition classDefinition,
+    private static void generateConstructor(ClassDefinition classDefinition,
             List<Integer> joinChannels,
             FieldDefinition sizeField,
             List<FieldDefinition> channelFields,
             List<FieldDefinition> joinChannelFields,
             FieldDefinition hashChannelField)
     {
-        Parameter channels = arg("channels", type(List.class, type(List.class, com.facebook.presto.spi.block.Block.class)));
+        Parameter channels = arg("channels", type(List.class, type(List.class, Block.class)));
         Parameter hashChannel = arg("hashChannel", type(Optional.class, Integer.class));
         MethodDefinition constructorDefinition = classDefinition.declareConstructor(a(PUBLIC), channels, hashChannel);
 
         Variable thisVariable = constructorDefinition.getThis();
         Variable blockIndex = constructorDefinition.getScope().declareVariable(int.class, "blockIndex");
 
-        Block constructor = constructorDefinition
+        ByteCodeBlock constructor = constructorDefinition
                 .getBody()
                 .comment("super();")
                 .append(thisVariable)
@@ -189,20 +190,20 @@ public class JoinCompiler
 
         for (int index = 0; index < channelFields.size(); index++) {
             ByteCodeExpression channel = channels.invoke("get", Object.class, constantInt(index))
-                    .cast(type(List.class, com.facebook.presto.spi.block.Block.class));
+                    .cast(type(List.class, Block.class));
 
             constructor.append(thisVariable.setField(channelFields.get(index), channel));
 
-            Block loopBody = new Block();
+            ByteCodeBlock loopBody = new ByteCodeBlock();
 
             constructor.comment("for(blockIndex = 0; blockIndex < channel.size(); blockIndex++) { size += channel.get(i).getRetainedSizeInBytes() }")
                     .append(new ForLoop()
                             .initialize(blockIndex.set(constantInt(0)))
-                            .condition(new Block()
+                            .condition(new ByteCodeBlock()
                                     .append(blockIndex)
                                     .append(channel.invoke("size", int.class))
                                     .invokeStatic(CompilerOperations.class, "lessThan", boolean.class, int.class, int.class))
-                            .update(new Block().incrementVariable(blockIndex, (byte) 1))
+                            .update(new ByteCodeBlock().incrementVariable(blockIndex, (byte) 1))
                             .body(loopBody));
 
             loopBody.append(thisVariable)
@@ -210,7 +211,7 @@ public class JoinCompiler
                     .getField(sizeField)
                     .append(
                             channel.invoke("get", Object.class, blockIndex)
-                            .cast(type(com.facebook.presto.spi.block.Block.class))
+                            .cast(type(Block.class))
                             .invoke("getRetainedSizeInBytes", int.class)
                             .cast(long.class))
                     .longAdd()
@@ -220,7 +221,7 @@ public class JoinCompiler
         constructor.comment("Set join channel fields");
         for (int index = 0; index < joinChannelFields.size(); index++) {
             ByteCodeExpression joinChannel = channels.invoke("get", Object.class, constantInt(joinChannels.get(index)))
-                    .cast(type(List.class, com.facebook.presto.spi.block.Block.class));
+                    .cast(type(List.class, Block.class));
 
             constructor.append(thisVariable.setField(joinChannelFields.get(index), joinChannel));
         }
@@ -237,7 +238,7 @@ public class JoinCompiler
         constructor.ret();
     }
 
-    private void generateGetChannelCountMethod(ClassDefinition classDefinition, List<FieldDefinition> channelFields)
+    private static void generateGetChannelCountMethod(ClassDefinition classDefinition, List<FieldDefinition> channelFields)
     {
         classDefinition.declareMethod(
                 a(PUBLIC),
@@ -248,7 +249,7 @@ public class JoinCompiler
                 .retInt();
     }
 
-    private void generateGetSizeInBytesMethod(ClassDefinition classDefinition, FieldDefinition sizeField)
+    private static void generateGetSizeInBytesMethod(ClassDefinition classDefinition, FieldDefinition sizeField)
     {
         MethodDefinition method = classDefinition.declareMethod(a(PUBLIC), "getSizeInBytes", type(long.class));
 
@@ -258,7 +259,7 @@ public class JoinCompiler
                 .retLong();
     }
 
-    private void generateAppendToMethod(ClassDefinition classDefinition, CallSiteBinder callSiteBinder, List<Type> types, List<FieldDefinition> channelFields)
+    private static void generateAppendToMethod(ClassDefinition classDefinition, CallSiteBinder callSiteBinder, List<Type> types, List<FieldDefinition> channelFields)
     {
         Parameter blockIndex = arg("blockIndex", int.class);
         Parameter blockPosition = arg("blockPosition", int.class);
@@ -267,7 +268,7 @@ public class JoinCompiler
         MethodDefinition method = classDefinition.declareMethod(a(PUBLIC), "appendTo", type(void.class), blockIndex, blockPosition, pageBuilder, outputChannelOffset);
 
         Variable thisVariable = method.getThis();
-        Block appendToBody = method.getBody();
+        ByteCodeBlock appendToBody = method.getBody();
 
         for (int index = 0; index < channelFields.size(); index++) {
             Type type = types.get(index);
@@ -276,7 +277,7 @@ public class JoinCompiler
             ByteCodeExpression block = thisVariable
                     .getField(channelFields.get(index))
                     .invoke("get", Object.class, blockIndex)
-                    .cast(com.facebook.presto.spi.block.Block.class);
+                    .cast(Block.class);
 
             appendToBody
                     .comment("%s.appendTo(channel_%s.get(blockIndex), blockPosition, pageBuilder.getBlockBuilder(outputChannelOffset + %s));", type.getClass(), index, index)
@@ -288,12 +289,12 @@ public class JoinCompiler
                     .push(index)
                     .append(OpCode.IADD)
                     .invokeVirtual(PageBuilder.class, "getBlockBuilder", BlockBuilder.class, int.class)
-                    .invokeInterface(Type.class, "appendTo", void.class, com.facebook.presto.spi.block.Block.class, int.class, BlockBuilder.class);
+                    .invokeInterface(Type.class, "appendTo", void.class, Block.class, int.class, BlockBuilder.class);
         }
         appendToBody.ret();
     }
 
-    private void generateHashPositionMethod(ClassDefinition classDefinition, CallSiteBinder callSiteBinder, List<Type> joinChannelTypes, List<FieldDefinition> joinChannelFields, FieldDefinition hashChannelField)
+    private static void generateHashPositionMethod(ClassDefinition classDefinition, CallSiteBinder callSiteBinder, List<Type> joinChannelTypes, List<FieldDefinition> joinChannelFields, FieldDefinition hashChannelField)
     {
         Parameter blockIndex = arg("blockIndex", int.class);
         Parameter blockPosition = arg("blockPosition", int.class);
@@ -314,7 +315,7 @@ public class JoinCompiler
                 bigintType.invoke(
                         "getLong",
                         long.class,
-                        hashChannel.invoke("get", Object.class, blockIndex).cast(com.facebook.presto.spi.block.Block.class),
+                        hashChannel.invoke("get", Object.class, blockIndex).cast(Block.class),
                         blockPosition)
                         .cast(int.class)
                         .ret()
@@ -334,7 +335,7 @@ public class JoinCompiler
                     .getThis()
                     .getField(joinChannelFields.get(index))
                     .invoke("get", Object.class, blockIndex)
-                    .cast(com.facebook.presto.spi.block.Block.class);
+                    .cast(Block.class);
 
             hashPositionMethod
                     .getBody()
@@ -352,10 +353,10 @@ public class JoinCompiler
                 .retInt();
     }
 
-    private void generateHashRowMethod(ClassDefinition classDefinition, CallSiteBinder callSiteBinder, List<Type> joinChannelTypes)
+    private static void generateHashRowMethod(ClassDefinition classDefinition, CallSiteBinder callSiteBinder, List<Type> joinChannelTypes)
     {
         Parameter position = arg("position", int.class);
-        Parameter blocks = arg("blocks", com.facebook.presto.spi.block.Block[].class);
+        Parameter blocks = arg("blocks", Block[].class);
         MethodDefinition hashPositionMethod = classDefinition.declareMethod(a(PUBLIC), "hashRow", type(int.class), position, blocks);
 
         Variable resultVariable = hashPositionMethod.getScope().declareVariable(int.class, "result");
@@ -365,7 +366,7 @@ public class JoinCompiler
             ByteCodeExpression type = constantType(callSiteBinder, joinChannelTypes.get(index));
 
             // todo is the case needed
-            ByteCodeExpression block = blocks.getElement(index).cast(com.facebook.presto.spi.block.Block.class);
+            ByteCodeExpression block = blocks.getElement(index).cast(Block.class);
 
             hashPositionMethod
                     .getBody()
@@ -391,7 +392,7 @@ public class JoinCompiler
             .ifFalse(type.invoke("hash", int.class, blockRef, blockPosition));
     }
 
-    private void generateRowEqualsRowMethod(
+    private static void generateRowEqualsRowMethod(
             ClassDefinition classDefinition,
             CallSiteBinder callSiteBinder,
             List<Type> joinChannelTypes)
@@ -401,9 +402,9 @@ public class JoinCompiler
                 "rowEqualsRow",
                 type(boolean.class),
                 arg("leftPosition", int.class),
-                arg("leftBlocks", com.facebook.presto.spi.block.Block[].class),
+                arg("leftBlocks", Block[].class),
                 arg("rightPosition", int.class),
-                arg("rightBlocks", com.facebook.presto.spi.block.Block[].class));
+                arg("rightBlocks", Block[].class));
 
         Scope compilerContext = hashPositionMethod.getScope();
         for (int index = 0; index < joinChannelTypes.size(); index++) {
@@ -438,7 +439,7 @@ public class JoinCompiler
                 .retInt();
     }
 
-    private void generatePositionEqualsRowMethod(
+    private static void generatePositionEqualsRowMethod(
             ClassDefinition classDefinition,
             CallSiteBinder callSiteBinder,
             List<Type> joinChannelTypes,
@@ -447,7 +448,7 @@ public class JoinCompiler
         Parameter leftBlockIndex = arg("leftBlockIndex", int.class);
         Parameter leftBlockPosition = arg("leftBlockPosition", int.class);
         Parameter rightPosition = arg("rightPosition", int.class);
-        Parameter rightBlocks = arg("rightBlocks", com.facebook.presto.spi.block.Block[].class);
+        Parameter rightBlocks = arg("rightBlocks", Block[].class);
         MethodDefinition hashPositionMethod = classDefinition.declareMethod(
                 a(PUBLIC),
                 "positionEqualsRow",
@@ -465,7 +466,7 @@ public class JoinCompiler
             ByteCodeExpression leftBlock = thisVariable
                     .getField(joinChannelFields.get(index))
                     .invoke("get", Object.class, leftBlockIndex)
-                    .cast(com.facebook.presto.spi.block.Block.class);
+                    .cast(Block.class);
 
             ByteCodeExpression rightBlock = rightBlocks.getElement(index);
 
@@ -485,7 +486,7 @@ public class JoinCompiler
                 .retInt();
     }
 
-    private void generatePositionEqualsPositionMethod(
+    private static void generatePositionEqualsPositionMethod(
             ClassDefinition classDefinition,
             CallSiteBinder callSiteBinder,
             List<Type> joinChannelTypes,
@@ -511,12 +512,12 @@ public class JoinCompiler
             ByteCodeExpression leftBlock = thisVariable
                     .getField(joinChannelFields.get(index))
                     .invoke("get", Object.class, leftBlockIndex)
-                    .cast(com.facebook.presto.spi.block.Block.class);
+                    .cast(Block.class);
 
             ByteCodeExpression rightBlock = thisVariable
                     .getField(joinChannelFields.get(index))
                     .invoke("get", Object.class, rightBlockIndex)
-                    .cast(com.facebook.presto.spi.block.Block.class);
+                    .cast(Block.class);
 
             LabelNode checkNextField = new LabelNode("checkNextField");
             hashPositionMethod
@@ -573,7 +574,7 @@ public class JoinCompiler
             }
         }
 
-        public LookupSource createLookupSource(LongArrayList addresses, List<List<com.facebook.presto.spi.block.Block>> channels, Optional<Integer> hashChannel)
+        public LookupSource createLookupSource(LongArrayList addresses, List<List<Block>> channels, Optional<Integer> hashChannel)
         {
             PagesHashStrategy pagesHashStrategy = pagesHashStrategyFactory.createPagesHashStrategy(channels, hashChannel);
             try {
@@ -599,7 +600,7 @@ public class JoinCompiler
             }
         }
 
-        public PagesHashStrategy createPagesHashStrategy(List<? extends List<com.facebook.presto.spi.block.Block>> channels, Optional<Integer> hashChannel)
+        public PagesHashStrategy createPagesHashStrategy(List<? extends List<Block>> channels, Optional<Integer> hashChannel)
         {
             try {
                 return constructor.newInstance(channels, hashChannel);

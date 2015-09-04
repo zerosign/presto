@@ -147,7 +147,7 @@ public class SqlQueryScheduler
                 }
                 else if (queryStateMachine.getQueryState() == QueryState.STARTING) {
                     // if the stage has at least one task, we are running
-                    if (!stage.getAllTasks().isEmpty()) {
+                    if (stage.hasTasks()) {
                         queryStateMachine.transitionToRunning();
                     }
                 }
@@ -303,6 +303,9 @@ public class SqlQueryScheduler
                 // wait for a state change and then schedule again
                 if (!blockedStages.isEmpty()) {
                     tryGetFutureValue(firstCompletedFuture(blockedStages), 100, MILLISECONDS);
+                    for (CompletableFuture<?> blockedStage : blockedStages) {
+                        blockedStage.cancel(true);
+                    }
                 }
             }
         }

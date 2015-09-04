@@ -39,6 +39,7 @@ import com.facebook.presto.operator.scalar.ArrayFunctions;
 import com.facebook.presto.operator.scalar.ColorFunctions;
 import com.facebook.presto.operator.scalar.CombineHashFunction;
 import com.facebook.presto.operator.scalar.DateTimeFunctions;
+import com.facebook.presto.operator.scalar.FailureFunction;
 import com.facebook.presto.operator.scalar.HyperLogLogFunctions;
 import com.facebook.presto.operator.scalar.JsonFunctions;
 import com.facebook.presto.operator.scalar.JsonOperators;
@@ -69,6 +70,7 @@ import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.type.ArrayType;
 import com.facebook.presto.type.BigintOperators;
 import com.facebook.presto.type.BooleanOperators;
+import com.facebook.presto.type.ColorOperators;
 import com.facebook.presto.type.DateOperators;
 import com.facebook.presto.type.DateTimeOperators;
 import com.facebook.presto.type.DoubleOperators;
@@ -116,6 +118,7 @@ import java.util.Set;
 
 import static com.facebook.presto.operator.aggregation.ArbitraryAggregation.ARBITRARY_AGGREGATION;
 import static com.facebook.presto.operator.aggregation.ArrayAggregation.ARRAY_AGGREGATION;
+import static com.facebook.presto.operator.aggregation.ChecksumAggregation.CHECKSUM_AGGREGATION;
 import static com.facebook.presto.operator.aggregation.CountColumn.COUNT_COLUMN;
 import static com.facebook.presto.operator.aggregation.Histogram.HISTOGRAM;
 import static com.facebook.presto.operator.aggregation.MapAggregation.MAP_AGG;
@@ -131,8 +134,8 @@ import static com.facebook.presto.operator.scalar.ArrayConcatFunction.ARRAY_CONC
 import static com.facebook.presto.operator.scalar.ArrayConstructor.ARRAY_CONSTRUCTOR;
 import static com.facebook.presto.operator.scalar.ArrayContains.ARRAY_CONTAINS;
 import static com.facebook.presto.operator.scalar.ArrayDistinctFunction.ARRAY_DISTINCT_FUNCTION;
-import static com.facebook.presto.operator.scalar.ArrayEqualOperator.ARRAY_EQUAL;
 import static com.facebook.presto.operator.scalar.ArrayElementAtFunction.ARRAY_ELEMENT_AT_FUNCTION;
+import static com.facebook.presto.operator.scalar.ArrayEqualOperator.ARRAY_EQUAL;
 import static com.facebook.presto.operator.scalar.ArrayGreaterThanOperator.ARRAY_GREATER_THAN;
 import static com.facebook.presto.operator.scalar.ArrayGreaterThanOrEqualOperator.ARRAY_GREATER_THAN_OR_EQUAL;
 import static com.facebook.presto.operator.scalar.ArrayHashCodeOperator.ARRAY_HASH_CODE;
@@ -269,6 +272,7 @@ public class FunctionRegistry
                 .scalar(DateTimeFunctions.class)
                 .scalar(JsonFunctions.class)
                 .scalar(ColorFunctions.class)
+                .scalar(ColorOperators.class)
                 .scalar(HyperLogLogFunctions.class)
                 .scalar(UnknownOperators.class)
                 .scalar(BooleanOperators.class)
@@ -289,6 +293,7 @@ public class FunctionRegistry
                 .scalar(ArrayFunctions.class)
                 .scalar(CombineHashFunction.class)
                 .scalar(JsonOperators.class)
+                .scalar(FailureFunction.class)
                 .function(IDENTITY_CAST)
                 .functions(ARRAY_CONTAINS, ARRAY_JOIN, ARRAY_JOIN_WITH_NULL_REPLACEMENT)
                 .functions(ARRAY_MIN, ARRAY_MAX)
@@ -299,6 +304,7 @@ public class FunctionRegistry
                 .functions(MAP_CONSTRUCTOR, MAP_CARDINALITY, MAP_SUBSCRIPT, MAP_TO_JSON, JSON_TO_MAP, MAP_KEYS, MAP_VALUES)
                 .functions(MAP_AGG, MULTIMAP_AGG)
                 .function(HISTOGRAM)
+                .function(CHECKSUM_AGGREGATION)
                 .function(ARBITRARY_AGGREGATION)
                 .function(ARRAY_AGGREGATION)
                 .functions(GREATEST, LEAST)

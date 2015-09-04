@@ -11,28 +11,28 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.facebook.presto.spi;
+package com.facebook.presto.raptor.backup;
+
+import com.google.inject.Inject;
+
+import java.util.Optional;
 
 import static java.util.Objects.requireNonNull;
 
-public class BeginDeleteResult
+public class BackupServiceManager
+        implements BackupService
 {
-    private final ConnectorTableHandle tableHandle;
-    private final ColumnHandle rowIdHandle;
+    private final Optional<BackupStore> backupStore;
 
-    public BeginDeleteResult(ConnectorTableHandle tableHandle, ColumnHandle rowIdHandle)
+    @Inject
+    public BackupServiceManager(Optional<BackupStore> backupStore)
     {
-        this.tableHandle = requireNonNull(tableHandle, "tableHandle is null");
-        this.rowIdHandle = requireNonNull(rowIdHandle, "rowIdHandle is null");
+        this.backupStore = requireNonNull(backupStore, "backupStore is null");
     }
 
-    public ConnectorTableHandle getTableHandle()
+    @Override
+    public boolean isBackupAvailable()
     {
-        return tableHandle;
-    }
-
-    public ColumnHandle getRowIdHandle()
-    {
-        return rowIdHandle;
+        return backupStore.isPresent();
     }
 }

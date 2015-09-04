@@ -42,8 +42,8 @@ import static com.facebook.presto.execution.StageState.FINISHED;
 import static com.facebook.presto.execution.StageState.PLANNED;
 import static com.facebook.presto.execution.StageState.RUNNING;
 import static com.facebook.presto.execution.StageState.SCHEDULED;
-import static com.facebook.presto.execution.StageState.SCHEDULING_SPLITS;
 import static com.facebook.presto.execution.StageState.SCHEDULING;
+import static com.facebook.presto.execution.StageState.SCHEDULING_SPLITS;
 import static com.facebook.presto.execution.StageState.TERMINAL_STAGE_STATES;
 import static io.airlift.units.DataSize.Unit.BYTE;
 import static io.airlift.units.DataSize.succinctDataSize;
@@ -123,7 +123,7 @@ public class StageStateMachine
     public synchronized boolean transitionToScheduled()
     {
         schedulingComplete.compareAndSet(null, DateTime.now());
-        return stageState.setIf(SCHEDULED, currentState -> currentState == PLANNED || currentState == SCHEDULING);
+        return stageState.setIf(SCHEDULED, currentState -> currentState == PLANNED || currentState == SCHEDULING || currentState == SCHEDULING_SPLITS);
     }
 
     public boolean transitionToRunning()
