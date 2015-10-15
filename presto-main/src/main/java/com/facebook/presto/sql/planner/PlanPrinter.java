@@ -16,6 +16,7 @@ package com.facebook.presto.sql.planner;
 import com.facebook.presto.Session;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.OperatorNotFoundException;
+import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.metadata.TableLayout;
 import com.facebook.presto.spi.ColumnHandle;
@@ -63,7 +64,6 @@ import com.facebook.presto.sql.tree.FunctionCall;
 import com.facebook.presto.sql.tree.QualifiedNameReference;
 import com.facebook.presto.util.GraphvizPrinter;
 import com.facebook.presto.util.ImmutableCollectors;
-import com.facebook.presto.util.JsonPlanPrinter;
 import com.google.common.base.Functions;
 import com.google.common.base.Joiner;
 import com.google.common.base.Strings;
@@ -86,8 +86,8 @@ import java.util.stream.Stream;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.planner.DomainUtils.simplifyDomain;
 import static com.facebook.presto.sql.planner.PlanFragment.NullPartitioning.REPLICATE;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static java.lang.String.format;
+import static java.util.Objects.requireNonNull;
 
 public class PlanPrinter
 {
@@ -101,9 +101,9 @@ public class PlanPrinter
 
     private PlanPrinter(PlanNode plan, Map<Symbol, Type> types, Metadata metadata, Session session, int indent)
     {
-        checkNotNull(plan, "plan is null");
-        checkNotNull(types, "types is null");
-        checkNotNull(metadata, "metadata is null");
+        requireNonNull(plan, "plan is null");
+        requireNonNull(types, "types is null");
+        requireNonNull(metadata, "metadata is null");
 
         this.metadata = metadata;
 
@@ -125,11 +125,6 @@ public class PlanPrinter
     public static String textLogicalPlan(PlanNode plan, Map<Symbol, Type> types, Metadata metadata, Session session, int indent)
     {
         return new PlanPrinter(plan, types, metadata, session, indent).toString();
-    }
-
-    public static String getJsonPlanSource(PlanNode plan, Metadata metadata, Session session)
-    {
-        return JsonPlanPrinter.getPlan(plan, metadata, session);
     }
 
     public static String textDistributedPlan(SubPlan plan, Metadata metadata, Session session)
@@ -618,8 +613,8 @@ public class PlanPrinter
 
             try {
                 ColumnMetadata columnMetadata = metadata.getColumnMetadata(session, table, column);
-                MethodHandle method = metadata.getFunctionRegistry().getCoercion(columnMetadata.getType(), VARCHAR)
-                        .getMethodHandle();
+                Signature coercion = metadata.getFunctionRegistry().getCoercion(columnMetadata.getType(), VARCHAR);
+                MethodHandle method = metadata.getFunctionRegistry().getScalarFunctionImplementation(coercion).getMethodHandle();
 
                 for (Range range : domain.getRanges()) {
                     StringBuilder builder = new StringBuilder();

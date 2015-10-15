@@ -17,6 +17,7 @@ import com.facebook.presto.discovery.EmbeddedDiscoveryModule;
 import com.facebook.presto.execution.NodeSchedulerConfig;
 import com.facebook.presto.metadata.CatalogManager;
 import com.facebook.presto.metadata.Metadata;
+import com.facebook.presto.security.AccessControlModule;
 import com.facebook.presto.server.security.ServerSecurityModule;
 import com.facebook.presto.sql.parser.SqlParserOptions;
 import com.google.common.base.Joiner;
@@ -48,10 +49,10 @@ import java.util.Set;
 
 import static com.facebook.presto.server.PrestoSystemRequirements.verifyJvmRequirements;
 import static com.facebook.presto.server.PrestoSystemRequirements.verifySystemTimeIsReasonable;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Strings.nullToEmpty;
 import static io.airlift.discovery.client.ServiceAnnouncement.ServiceAnnouncementBuilder;
 import static io.airlift.discovery.client.ServiceAnnouncement.serviceAnnouncement;
+import static java.util.Objects.requireNonNull;
 
 public class PrestoServer
         implements Runnable
@@ -70,7 +71,7 @@ public class PrestoServer
 
     public PrestoServer(SqlParserOptions sqlParserOptions)
     {
-        this.sqlParserOptions = checkNotNull(sqlParserOptions, "sqlParserOptions is null");
+        this.sqlParserOptions = requireNonNull(sqlParserOptions, "sqlParserOptions is null");
     }
 
     @Override
@@ -97,6 +98,7 @@ public class PrestoServer
                 new HttpEventModule(),
                 new EmbeddedDiscoveryModule(),
                 new ServerSecurityModule(),
+                new AccessControlModule(),
                 new ServerMainModule(sqlParserOptions));
 
         modules.addAll(getAdditionalModules());

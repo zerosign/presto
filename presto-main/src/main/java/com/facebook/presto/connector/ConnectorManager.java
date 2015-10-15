@@ -20,6 +20,7 @@ import com.facebook.presto.connector.system.SystemConnector;
 import com.facebook.presto.index.IndexManager;
 import com.facebook.presto.metadata.HandleResolver;
 import com.facebook.presto.metadata.MetadataManager;
+import com.facebook.presto.security.AccessControlManager;
 import com.facebook.presto.spi.Connector;
 import com.facebook.presto.spi.ConnectorFactory;
 import com.facebook.presto.spi.ConnectorHandleResolver;
@@ -33,6 +34,7 @@ import com.facebook.presto.spi.ConnectorSplitManager;
 import com.facebook.presto.spi.NodeManager;
 import com.facebook.presto.spi.SystemTable;
 import com.facebook.presto.spi.classloader.ThreadContextClassLoader;
+import com.facebook.presto.spi.security.ConnectorAccessControl;
 import com.facebook.presto.spi.session.PropertyMetadata;
 import com.facebook.presto.split.PageSinkManager;
 import com.facebook.presto.split.PageSourceManager;
@@ -52,8 +54,9 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.lang.String.format;
+import static java.util.Objects.requireNonNull;
 
 public class ConnectorManager
 {
@@ -63,6 +66,7 @@ public class ConnectorManager
     private static final Logger log = Logger.get(ConnectorManager.class);
 
     private final MetadataManager metadataManager;
+    private final AccessControlManager accessControlManager;
     private final SplitManager splitManager;
     private final PageSourceManager pageSourceManager;
     private final IndexManager indexManager;
@@ -79,6 +83,7 @@ public class ConnectorManager
 
     @Inject
     public ConnectorManager(MetadataManager metadataManager,
+            AccessControlManager accessControlManager,
             SplitManager splitManager,
             PageSourceManager pageSourceManager,
             IndexManager indexManager,
@@ -88,6 +93,7 @@ public class ConnectorManager
             NodeManager nodeManager)
     {
         this.metadataManager = metadataManager;
+        this.accessControlManager = accessControlManager;
         this.splitManager = splitManager;
         this.pageSourceManager = pageSourceManager;
         this.indexManager = indexManager;
@@ -125,9 +131,9 @@ public class ConnectorManager
     public synchronized void createConnection(String catalogName, String connectorName, Map<String, String> properties)
     {
         checkState(!stopped.get(), "ConnectorManager is stopped");
-        checkNotNull(catalogName, "catalogName is null");
-        checkNotNull(connectorName, "connectorName is null");
-        checkNotNull(properties, "properties is null");
+        requireNonNull(catalogName, "catalogName is null");
+        requireNonNull(connectorName, "connectorName is null");
+        requireNonNull(properties, "properties is null");
 
         ConnectorFactory connectorFactory = connectorFactories.get(connectorName);
         checkArgument(connectorFactory != null, "No factory for connector %s", connectorName);
@@ -139,9 +145,9 @@ public class ConnectorManager
     public synchronized void createConnection(String catalogName, ConnectorFactory connectorFactory, Map<String, String> properties)
     {
         checkState(!stopped.get(), "ConnectorManager is stopped");
-        checkNotNull(catalogName, "catalogName is null");
-        checkNotNull(properties, "properties is null");
-        checkNotNull(connectorFactory, "connectorFactory is null");
+        requireNonNull(catalogName, "catalogName is null");
+        requireNonNull(properties, "properties is null");
+        requireNonNull(connectorFactory, "connectorFactory is null");
 
         String connectorId = getConnectorId(catalogName);
         checkState(!connectors.containsKey(connectorId), "A connector %s already exists", connectorId);
@@ -154,8 +160,8 @@ public class ConnectorManager
     public synchronized void createConnection(String catalogName, Connector connector)
     {
         checkState(!stopped.get(), "ConnectorManager is stopped");
-        checkNotNull(catalogName, "catalogName is null");
-        checkNotNull(connector, "connector is null");
+        requireNonNull(catalogName, "catalogName is null");
+        requireNonNull(connector, "connector is null");
 
         addConnector(catalogName, getConnectorId(catalogName), connector);
     }
@@ -173,12 +179,12 @@ public class ConnectorManager
         checkState(connectorSplitManager != null, "Connector %s does not have a split manager", connectorId);
 
         Set<SystemTable> systemTables = connector.getSystemTables();
-        checkNotNull(systemTables, "Connector %s returned a null system tables set");
+        requireNonNull(systemTables, "Connector %s returned a null system tables set");
 
         ConnectorPageSourceProvider connectorPageSourceProvider = null;
         try {
             connectorPageSourceProvider = connector.getPageSourceProvider();
-            checkNotNull(connectorPageSourceProvider, "Connector %s returned a null page source provider", connectorId);
+            requireNonNull(connectorPageSourceProvider, format("Connector %s returned a null page source provider", connectorId));
         }
         catch (UnsupportedOperationException ignored) {
         }
@@ -187,7 +193,7 @@ public class ConnectorManager
             ConnectorRecordSetProvider connectorRecordSetProvider = null;
             try {
                 connectorRecordSetProvider = connector.getRecordSetProvider();
-                checkNotNull(connectorRecordSetProvider, "Connector %s returned a null record set provider", connectorId);
+                requireNonNull(connectorRecordSetProvider, format("Connector %s returned a null record set provider", connectorId));
             }
             catch (UnsupportedOperationException ignored) {
             }
@@ -196,12 +202,12 @@ public class ConnectorManager
         }
 
         ConnectorHandleResolver connectorHandleResolver = connector.getHandleResolver();
-        checkNotNull(connectorHandleResolver, "Connector %s does not have a handle resolver", connectorId);
+        requireNonNull(connectorHandleResolver, format("Connector %s does not have a handle resolver", connectorId));
 
         ConnectorPageSinkProvider connectorPageSinkProvider = null;
         try {
             connectorPageSinkProvider = connector.getPageSinkProvider();
-            checkNotNull(connectorPageSinkProvider, "Connector %s returned a null page sink provider", connectorId);
+            requireNonNull(connectorPageSinkProvider, format("Connector %s returned a null page sink provider", connectorId));
         }
         catch (UnsupportedOperationException ignored) {
         }
@@ -210,7 +216,7 @@ public class ConnectorManager
             ConnectorRecordSinkProvider connectorRecordSinkProvider = null;
             try {
                 connectorRecordSinkProvider = connector.getRecordSinkProvider();
-                checkNotNull(connectorRecordSinkProvider, "Connector %s returned a null record sink provider", connectorId);
+                requireNonNull(connectorRecordSinkProvider, format("Connector %s returned a null record sink provider", connectorId));
                 connectorPageSinkProvider = new RecordPageSinkProvider(connectorRecordSinkProvider);
             }
             catch (UnsupportedOperationException ignored) {
@@ -220,13 +226,20 @@ public class ConnectorManager
         ConnectorIndexResolver indexResolver = null;
         try {
             indexResolver = connector.getIndexResolver();
-            checkNotNull(indexResolver, "Connector %s returned a null index resolver", connectorId);
+            requireNonNull(indexResolver, format("Connector %s returned a null index resolver", connectorId));
         }
         catch (UnsupportedOperationException ignored) {
         }
 
         List<PropertyMetadata<?>> tableProperties = connector.getTableProperties();
-        checkNotNull(tableProperties, "Connector %s returned null table properties", connectorId);
+        requireNonNull(tableProperties, format("Connector %s returned null table properties", connectorId));
+
+        ConnectorAccessControl accessControl = null;
+        try {
+            accessControl = connector.getAccessControl();
+        }
+        catch (UnsupportedOperationException ignored) {
+        }
 
         // IMPORTANT: all the instances need to be fetched from the connector *before* we add them to the corresponding managers.
         // Otherwise, a broken connector would leave the managers in an inconsistent state with respect to each other
@@ -254,6 +267,10 @@ public class ConnectorManager
 
         if (indexResolver != null) {
             indexManager.addIndexResolver(connectorId, indexResolver);
+        }
+
+        if (accessControl != null) {
+            accessControlManager.addCatalogAccessControl(catalogName, accessControl);
         }
     }
 

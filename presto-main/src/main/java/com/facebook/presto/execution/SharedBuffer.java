@@ -55,9 +55,9 @@ import static com.facebook.presto.execution.SharedBuffer.BufferState.TERMINAL_BU
 import static com.facebook.presto.util.ImmutableCollectors.toImmutableSet;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.util.concurrent.Futures.immediateFuture;
+import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 
@@ -156,13 +156,13 @@ public class SharedBuffer
 
     public SharedBuffer(TaskId taskId, Executor executor, DataSize maxBufferSize, SystemMemoryUsageListener systemMemoryUsageListener)
     {
-        checkNotNull(taskId, "taskId is null");
-        checkNotNull(executor, "executor is null");
+        requireNonNull(taskId, "taskId is null");
+        requireNonNull(executor, "executor is null");
         state = new StateMachine<>(taskId + "-buffer", executor, OPEN, TERMINAL_BUFFER_STATES);
 
-        checkNotNull(maxBufferSize, "maxBufferSize is null");
+        requireNonNull(maxBufferSize, "maxBufferSize is null");
         checkArgument(maxBufferSize.toBytes() > 0, "maxBufferSize must be at least 1");
-        checkNotNull(systemMemoryUsageListener, "systemMemoryUsageListener is null");
+        requireNonNull(systemMemoryUsageListener, "systemMemoryUsageListener is null");
         this.memoryManager = new SharedBufferMemoryManager(maxBufferSize.toBytes(), systemMemoryUsageListener);
     }
 
@@ -181,7 +181,7 @@ public class SharedBuffer
         //
         // NOTE: this code must be lock free to we are not hanging state machine updates
         //
-        checkState(!Thread.holdsLock(this), "Thread must NOT hold a lock on the %s", SharedBuffer.class.getSimpleName());
+        checkDoesNotHoldLock();
         BufferState state = this.state.get();
         ImmutableList.Builder<BufferInfo> infos = ImmutableList.builder();
         for (NamedBuffer namedBuffer : namedBuffers.values()) {
@@ -203,7 +203,7 @@ public class SharedBuffer
 
     public synchronized void setOutputBuffers(OutputBuffers newOutputBuffers)
     {
-        checkNotNull(newOutputBuffers, "newOutputBuffers is null");
+        requireNonNull(newOutputBuffers, "newOutputBuffers is null");
         // ignore buffers added after query finishes, which can happen when a query is canceled
         // also ignore old versions, which is normal
         if (state.get().isTerminal() || outputBuffers.getVersion() >= newOutputBuffers.getVersion()) {
@@ -250,7 +250,7 @@ public class SharedBuffer
 
     private PartitionBuffer createOrGetPartitionBuffer(int partition)
     {
-        checkState(Thread.holdsLock(this), "Thread must hold a lock on the %s", SharedBuffer.class.getSimpleName());
+        checkHoldsLock();
         return partitionBuffers.computeIfAbsent(partition, k -> new PartitionBuffer(partition, memoryManager));
     }
 
@@ -261,7 +261,7 @@ public class SharedBuffer
 
     public synchronized ListenableFuture<?> enqueue(int partition, Page page)
     {
-        checkNotNull(page, "page is null");
+        requireNonNull(page, "page is null");
 
         // ignore pages after no more pages is set
         // this can happen with a limit query
@@ -278,7 +278,7 @@ public class SharedBuffer
 
     public synchronized CompletableFuture<BufferResult> get(TaskId outputId, long startingSequenceId, DataSize maxSize)
     {
-        checkNotNull(outputId, "outputId is null");
+        requireNonNull(outputId, "outputId is null");
         checkArgument(maxSize.toBytes() > 0, "maxSize must be at least 1 byte");
 
         // if no buffers can be added, and the requested buffer does not exist, return a closed empty result
@@ -297,7 +297,7 @@ public class SharedBuffer
 
     public synchronized void abort(TaskId outputId)
     {
-        checkNotNull(outputId, "outputId is null");
+        requireNonNull(outputId, "outputId is null");
 
         abortedBuffers.add(outputId);
 
@@ -352,11 +352,11 @@ public class SharedBuffer
 
     private void checkFlushComplete()
     {
-        checkState(Thread.holdsLock(this), "Thread must hold a lock on the %s", SharedBuffer.class.getSimpleName());
+        checkHoldsLock();
 
         if (state.get() == FLUSHING) {
             for (NamedBuffer namedBuffer : namedBuffers.values()) {
-                if (!namedBuffer.checkCompletion()) {
+                if (!namedBuffer.isFinished()) {
                     return;
                 }
             }
@@ -366,7 +366,7 @@ public class SharedBuffer
 
     private void updateState()
     {
-        checkState(Thread.holdsLock(this), "Thread must hold a lock on the %s", SharedBuffer.class.getSimpleName());
+        checkHoldsLock();
 
         try {
             processPendingReads();
@@ -392,14 +392,9 @@ public class SharedBuffer
                             .min()
                             .getAsLong();
                     partitionBuffer.advanceSequenceId(newMasterSequenceId);
-                    // this might have freed up space in the buffers, try to dequeue pages
-                    partitionBuffers.values().forEach(PartitionBuffer::dequeuePages);
                 }
-            }
-
-            // remove any completed buffers
-            if (!state.canAddPages()) {
-                namedBuffers.values().forEach(SharedBuffer.NamedBuffer::checkCompletion);
+                // this might have freed up space in the buffers, try to dequeue pages
+                partitionBuffers.values().forEach(PartitionBuffer::dequeuePages);
             }
         }
         finally {
@@ -409,9 +404,25 @@ public class SharedBuffer
 
     private void processPendingReads()
     {
-        checkState(Thread.holdsLock(this), "Thread must hold a lock on the %s", SharedBuffer.class.getSimpleName());
+        checkHoldsLock();
+        Set<GetBufferResult> finishedListeners = ImmutableList.copyOf(stateChangeListeners).stream().filter(GetBufferResult::execute).collect(toImmutableSet());
+        stateChangeListeners.removeAll(finishedListeners);
+    }
 
-        ImmutableList.copyOf(stateChangeListeners).stream().filter(GetBufferResult::execute).forEach(stateChangeListeners::remove);
+    private void checkHoldsLock()
+    {
+        // This intentionally does not use checkState, because it's called *very* frequently. To the point that
+        // SharedBuffer.class.getSimpleName() showed up in perf
+        if (!Thread.holdsLock(this)) {
+            throw new IllegalStateException(format("Thread must hold a lock on the %s", SharedBuffer.class.getSimpleName()));
+        }
+    }
+
+    private void checkDoesNotHoldLock()
+    {
+        if (Thread.holdsLock(this)) {
+            throw new IllegalStateException(format("Thread must NOT hold a lock on the %s", SharedBuffer.class.getSimpleName()));
+        }
     }
 
     @ThreadSafe
@@ -434,7 +445,7 @@ public class SharedBuffer
             //
             // NOTE: this code must be lock free to we are not hanging state machine updates
             //
-            checkState(!Thread.holdsLock(SharedBuffer.this), "Thread must NOT hold a lock on the %s", SharedBuffer.class.getSimpleName());
+            checkDoesNotHoldLock();
 
             long sequenceId = this.sequenceId.get();
 
@@ -448,14 +459,14 @@ public class SharedBuffer
 
         public long getSequenceId()
         {
-            checkState(Thread.holdsLock(SharedBuffer.this), "Thread must hold a lock on the %s", SharedBuffer.class.getSimpleName());
+            checkHoldsLock();
 
             return sequenceId.get();
         }
 
         public BufferResult getPages(long startingSequenceId, DataSize maxSize)
         {
-            checkState(Thread.holdsLock(SharedBuffer.this), "Thread must hold a lock on the %s", SharedBuffer.class.getSimpleName());
+            checkHoldsLock();
             checkArgument(maxSize.toBytes() > 0, "maxSize must be at least 1 byte");
 
             long sequenceId = this.sequenceId.get();
@@ -467,37 +478,31 @@ public class SharedBuffer
                 sequenceId = startingSequenceId;
             }
 
-            if (checkCompletion()) {
+            if (isFinished()) {
                 return emptyResults(startingSequenceId, true);
             }
 
             List<Page> pages = partitionBuffer.getPages(maxSize, sequenceId);
+
+            // if we can't have any more pages, indicate that the buffer is complete
+            if (pages.isEmpty() && !state.get().canAddPages()) {
+                return emptyResults(startingSequenceId, true);
+            }
+
             return new BufferResult(startingSequenceId, startingSequenceId + pages.size(), false, pages);
         }
 
         public void abort()
         {
-            checkState(Thread.holdsLock(SharedBuffer.this), "Thread must hold a lock on the %s", SharedBuffer.class.getSimpleName());
+            checkHoldsLock();
 
             finished.set(true);
+            checkFlushComplete();
         }
 
-        public boolean checkCompletion()
+        public boolean isFinished()
         {
-            checkState(Thread.holdsLock(SharedBuffer.this), "Thread must hold a lock on the %s", SharedBuffer.class.getSimpleName());
-            // WARNING: finish must short circuit this call, or the call to checkFlushComplete below will cause an infinite recursion
-            if (finished.get()) {
-                return true;
-            }
-
-            long pagesAdded = partitionBuffer.getPageCount();
-            if (!state.get().canAddPages() && sequenceId.get() >= pagesAdded) {
-                // WARNING: finish must set before the call to checkFlushComplete of the short circuit above will not trigger and the code enter an infinite recursion
-                finished.set(true);
-
-                // check if master buffer is finished
-                checkFlushComplete();
-            }
+            checkHoldsLock();
             return finished.get();
         }
 
@@ -535,7 +540,7 @@ public class SharedBuffer
 
         public boolean execute()
         {
-            checkState(Thread.holdsLock(SharedBuffer.this), "Thread must hold a lock on the %s", SharedBuffer.class.getSimpleName());
+            checkHoldsLock();
 
             if (future.isDone()) {
                 return true;
@@ -575,7 +580,7 @@ public class SharedBuffer
                 checkFlushComplete();
 
                 // if we got an empty result, wait for more pages
-                if (bufferResult.isEmpty() && !bufferResult.isBufferClosed()) {
+                if (bufferResult.isEmpty() && !bufferResult.isBufferComplete()) {
                     return false;
                 }
 

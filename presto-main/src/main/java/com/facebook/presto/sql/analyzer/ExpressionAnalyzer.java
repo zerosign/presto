@@ -14,11 +14,13 @@
 package com.facebook.presto.sql.analyzer;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.metadata.FunctionInfo;
 import com.facebook.presto.metadata.FunctionRegistry;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.OperatorNotFoundException;
 import com.facebook.presto.metadata.OperatorType;
+import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.security.AccessControl;
+import com.facebook.presto.security.DenyAllAccessControl;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.spi.type.TypeSignature;
@@ -118,8 +120,8 @@ import static com.facebook.presto.util.DateTimeUtils.timestampHasTimeZone;
 import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
 import static com.facebook.presto.util.Types.checkType;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.collect.Sets.newIdentityHashSet;
+import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
 public class ExpressionAnalyzer
@@ -128,7 +130,7 @@ public class ExpressionAnalyzer
     private final TypeManager typeManager;
     private final Function<Node, StatementAnalyzer> statementAnalyzerFactory;
     private final Map<QualifiedName, Integer> resolvedNames = new HashMap<>();
-    private final IdentityHashMap<FunctionCall, FunctionInfo> resolvedFunctions = new IdentityHashMap<>();
+    private final IdentityHashMap<FunctionCall, Signature> resolvedFunctions = new IdentityHashMap<>();
     private final IdentityHashMap<Expression, Type> expressionTypes = new IdentityHashMap<>();
     private final IdentityHashMap<Expression, Type> expressionCoercions = new IdentityHashMap<>();
     private final IdentityHashMap<Expression, Boolean> rowFieldReferences = new IdentityHashMap<>();
@@ -137,9 +139,9 @@ public class ExpressionAnalyzer
 
     public ExpressionAnalyzer(FunctionRegistry functionRegistry, TypeManager typeManager, Function<Node, StatementAnalyzer> statementAnalyzerFactory, Session session)
     {
-        this.functionRegistry = checkNotNull(functionRegistry, "functionRegistry is null");
-        this.typeManager = checkNotNull(typeManager, "typeManager is null");
-        this.statementAnalyzerFactory = checkNotNull(statementAnalyzerFactory, "statementAnalyzerFactory is null");
+        this.functionRegistry = requireNonNull(functionRegistry, "functionRegistry is null");
+        this.typeManager = requireNonNull(typeManager, "typeManager is null");
+        this.statementAnalyzerFactory = requireNonNull(statementAnalyzerFactory, "statementAnalyzerFactory is null");
         this.session = requireNonNull(session, "session is null");
     }
 
@@ -148,7 +150,7 @@ public class ExpressionAnalyzer
         return resolvedNames;
     }
 
-    public IdentityHashMap<FunctionCall, FunctionInfo> getResolvedFunctions()
+    public IdentityHashMap<FunctionCall, Signature> getResolvedFunctions()
     {
         return resolvedFunctions;
     }
@@ -217,7 +219,7 @@ public class ExpressionAnalyzer
 
         private Visitor(TupleDescriptor tupleDescriptor)
         {
-            this.tupleDescriptor = checkNotNull(tupleDescriptor, "tupleDescriptor is null");
+            this.tupleDescriptor = requireNonNull(tupleDescriptor, "tupleDescriptor is null");
         }
 
         @SuppressWarnings("SuspiciousMethodCalls")
@@ -434,7 +436,7 @@ public class ExpressionAnalyzer
 
             for (WhenClause whenClause : node.getWhenClauses()) {
                 Type whenClauseType = process(whenClause.getResult(), context);
-                checkNotNull(whenClauseType, "Expression types does not contain an entry for %s", whenClause);
+                requireNonNull(whenClauseType, format("Expression types does not contain an entry for %s", whenClause));
                 expressionTypes.put(whenClause, whenClauseType);
             }
 
@@ -455,7 +457,7 @@ public class ExpressionAnalyzer
 
             for (WhenClause whenClause : node.getWhenClauses()) {
                 Type whenClauseType = process(whenClause.getResult(), context);
-                checkNotNull(whenClauseType, "Expression types does not contain an entry for %s", whenClause);
+                requireNonNull(whenClauseType, format("Expression types does not contain an entry for %s", whenClause));
                 expressionTypes.put(whenClause, whenClauseType);
             }
 
@@ -685,15 +687,15 @@ public class ExpressionAnalyzer
                 argumentTypes.add(process(expression, context).getTypeSignature());
             }
 
-            FunctionInfo function = functionRegistry.resolveFunction(node.getName(), argumentTypes.build(), context.isApproximate());
+            Signature function = functionRegistry.resolveFunction(node.getName(), argumentTypes.build(), context.isApproximate());
             for (int i = 0; i < node.getArguments().size(); i++) {
                 Expression expression = node.getArguments().get(i);
                 Type type = typeManager.getType(function.getArgumentTypes().get(i));
-                checkNotNull(type, "Type %s not found", function.getArgumentTypes().get(i));
+                requireNonNull(type, format("Type %s not found", function.getArgumentTypes().get(i)));
                 if (node.isDistinct() && !type.isComparable()) {
                     throw new SemanticException(TYPE_MISMATCH, node, "DISTINCT can only be applied to comparable types (actual: %s)", type);
                 }
-                coerceType(context, expression, type, String.format("Function %s argument %d", function.getSignature(), i));
+                coerceType(context, expression, type, String.format("Function %s argument %d", function, i));
             }
             resolvedFunctions.put(node, function);
 
@@ -837,9 +839,9 @@ public class ExpressionAnalyzer
                 argumentTypes.add(process(expression, context));
             }
 
-            FunctionInfo operatorInfo;
+            Signature operatorSignature;
             try {
-                operatorInfo = functionRegistry.resolveOperator(operatorType, argumentTypes.build());
+                operatorSignature = functionRegistry.resolveOperator(operatorType, argumentTypes.build());
             }
             catch (OperatorNotFoundException e) {
                 throw new SemanticException(TYPE_MISMATCH, node, e.getMessage());
@@ -847,11 +849,11 @@ public class ExpressionAnalyzer
 
             for (int i = 0; i < arguments.length; i++) {
                 Expression expression = arguments[i];
-                Type type = typeManager.getType(operatorInfo.getArgumentTypes().get(i));
-                coerceType(context, expression, type, String.format("Operator %s argument %d", operatorInfo, i));
+                Type type = typeManager.getType(operatorSignature.getArgumentTypes().get(i));
+                coerceType(context, expression, type, String.format("Operator %s argument %d", operatorSignature, i));
             }
 
-            Type type = typeManager.getType(operatorInfo.getReturnType());
+            Type type = typeManager.getType(operatorSignature.getReturnType());
             expressionTypes.put(node, type);
 
             return type;
@@ -986,7 +988,7 @@ public class ExpressionAnalyzer
         return analyzeExpressions(session, metadata, sqlParser, new TupleDescriptor(fields), expressions);
     }
 
-    public static ExpressionAnalysis analyzeExpressionsWithInputs(
+    private static ExpressionAnalysis analyzeExpressionsWithInputs(
             Session session,
             Metadata metadata,
             SqlParser sqlParser,
@@ -1009,7 +1011,9 @@ public class ExpressionAnalyzer
             TupleDescriptor tupleDescriptor,
             Iterable<? extends Expression> expressions)
     {
-        ExpressionAnalyzer analyzer = create(new Analysis(), session, metadata, sqlParser, false);
+        // expressions at this point can not have sub queries so deny all access checks
+        // in the future, we will need a full access controller here to verify access to functions
+        ExpressionAnalyzer analyzer = create(new Analysis(), session, metadata, sqlParser, new DenyAllAccessControl(), false);
         for (Expression expression : expressions) {
             analyzer.analyze(expression, tupleDescriptor, new AnalysisContext());
         }
@@ -1023,6 +1027,7 @@ public class ExpressionAnalyzer
     public static ExpressionAnalysis analyzeExpression(
             Session session,
             Metadata metadata,
+            AccessControl accessControl,
             SqlParser sqlParser,
             TupleDescriptor tupleDescriptor,
             Analysis analysis,
@@ -1030,16 +1035,16 @@ public class ExpressionAnalyzer
             AnalysisContext context,
             Expression expression)
     {
-        ExpressionAnalyzer analyzer = create(analysis, session, metadata, sqlParser, approximateQueriesEnabled);
+        ExpressionAnalyzer analyzer = create(analysis, session, metadata, sqlParser, accessControl, approximateQueriesEnabled);
         analyzer.analyze(expression, tupleDescriptor, context);
 
         IdentityHashMap<Expression, Type> expressionTypes = analyzer.getExpressionTypes();
         IdentityHashMap<Expression, Type> expressionCoercions = analyzer.getExpressionCoercions();
-        IdentityHashMap<FunctionCall, FunctionInfo> resolvedFunctions = analyzer.getResolvedFunctions();
+        IdentityHashMap<FunctionCall, Signature> resolvedFunctions = analyzer.getResolvedFunctions();
 
         analysis.addTypes(expressionTypes);
         analysis.addCoercions(expressionCoercions);
-        analysis.addFunctionInfos(resolvedFunctions);
+        analysis.addFunctionSignatures(resolvedFunctions);
         analysis.addRowFieldReferences(analyzer.getRowFieldReferences());
 
         for (Expression subExpression : expressionTypes.keySet()) {
@@ -1051,12 +1056,18 @@ public class ExpressionAnalyzer
         return new ExpressionAnalysis(expressionTypes, expressionCoercions, subqueryInPredicates);
     }
 
-    public static ExpressionAnalyzer create(Analysis analysis, Session session, Metadata metadata, SqlParser sqlParser, boolean experimentalSyntaxEnabled)
+    public static ExpressionAnalyzer create(
+            Analysis analysis,
+            Session session,
+            Metadata metadata,
+            SqlParser sqlParser,
+            AccessControl accessControl,
+            boolean experimentalSyntaxEnabled)
     {
         return new ExpressionAnalyzer(
                 metadata.getFunctionRegistry(),
                 metadata.getTypeManager(),
-                node -> new StatementAnalyzer(analysis, metadata, sqlParser, session, experimentalSyntaxEnabled, Optional.empty()),
+                node -> new StatementAnalyzer(analysis, metadata, sqlParser, accessControl, session, experimentalSyntaxEnabled, Optional.empty()),
                 session);
     }
     public static ExpressionAnalyzer createConstantAnalyzer(Metadata metadata, Session session)

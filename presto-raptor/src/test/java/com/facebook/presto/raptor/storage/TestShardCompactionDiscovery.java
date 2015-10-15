@@ -17,7 +17,6 @@ import com.facebook.presto.raptor.metadata.ColumnInfo;
 import com.facebook.presto.raptor.metadata.ColumnStats;
 import com.facebook.presto.raptor.metadata.DatabaseShardManager;
 import com.facebook.presto.raptor.metadata.MetadataDao;
-import com.facebook.presto.raptor.metadata.MetadataDaoUtils;
 import com.facebook.presto.raptor.metadata.ShardInfo;
 import com.facebook.presto.raptor.metadata.ShardManager;
 import com.facebook.presto.raptor.metadata.ShardMetadata;
@@ -41,16 +40,20 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
+import static com.facebook.presto.raptor.metadata.MetadataDaoUtils.createMetadataTablesWithRetry;
 import static com.facebook.presto.raptor.metadata.TestDatabaseShardManager.shardInfo;
 import static com.facebook.presto.raptor.storage.TestOrcStorageManager.createOrcStorageManager;
 import static com.facebook.presto.raptor.storage.TestShardRecovery.createShardRecoveryManager;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
+import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static java.util.stream.Collectors.toSet;
 import static org.testng.Assert.assertEquals;
 
 @Test(singleThreaded = true)
 public class TestShardCompactionDiscovery
 {
+    private static final ReaderAttributes readerAttributes = new ReaderAttributes(new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE));
+
     private IDBI dbi;
     private Handle dummyHandle;
     private File dataDir;
@@ -79,9 +82,8 @@ public class TestShardCompactionDiscovery
         List<ColumnInfo> columns = ImmutableList.of(new ColumnInfo(1, BIGINT), new ColumnInfo(2, BIGINT));
         long tableId = 1;
         shardManager.createTable(tableId, columns);
-        MetadataDao metadataDao = dbi.onDemand(MetadataDao.class);
-        MetadataDaoUtils.createMetadataTablesWithRetry(metadataDao);
-        metadataDao.updateTemporalColumnId(1, 1);
+        createMetadataTablesWithRetry(dbi);
+        dbi.onDemand(MetadataDao.class).updateTemporalColumnId(1, 1);
 
         Set<ShardInfo> nonTimeRangeShards = ImmutableSet.<ShardInfo>builder()
                 .add(shardInfo(UUID.randomUUID(), "node1"))
@@ -113,14 +115,14 @@ public class TestShardCompactionDiscovery
                 dbi,
                 "node1",
                 shardManager,
-                new ShardCompactor(storageManager),
+                new ShardCompactor(storageManager, readerAttributes),
                 new Duration(1, TimeUnit.HOURS),
                 new DataSize(1, DataSize.Unit.MEGABYTE),
                 100,
                 10,
                 true);
 
-        Set<ShardMetadata> shardMetadata = shardManager.getNodeTableShards("node1", 1);
+        Set<ShardMetadata> shardMetadata = shardManager.getNodeShards("node1");
         Set<ShardMetadata> temporalMetadata = shardCompactionManager.filterShardsWithTemporalMetadata(shardMetadata, 1, 1);
         assertEquals(temporalMetadata.stream().map(ShardMetadata::getShardUuid).collect(toSet()), timeRangeShards.stream().map(ShardInfo::getShardUuid).collect(toSet()));
     }

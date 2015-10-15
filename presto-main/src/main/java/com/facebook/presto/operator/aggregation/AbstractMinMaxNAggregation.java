@@ -37,6 +37,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 
+import static com.facebook.presto.metadata.FunctionType.AGGREGATE;
 import static com.facebook.presto.metadata.Signature.orderableTypeParameter;
 import static com.facebook.presto.operator.aggregation.AggregationMetadata.ParameterMetadata;
 import static com.facebook.presto.operator.aggregation.AggregationMetadata.ParameterMetadata.ParameterType.BLOCK_INDEX;
@@ -48,7 +49,7 @@ import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMEN
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.type.TypeUtils.parameterizedTypeName;
 import static com.facebook.presto.util.Reflection.methodHandle;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public abstract class AbstractMinMaxNAggregation
         extends ParametricAggregation
@@ -63,11 +64,11 @@ public abstract class AbstractMinMaxNAggregation
 
     protected AbstractMinMaxNAggregation(String name, Function<Type, BlockComparator> typeToComparator)
     {
-        checkNotNull(name);
-        checkNotNull(typeToComparator);
+        requireNonNull(name);
+        requireNonNull(typeToComparator);
         this.name = name;
         this.typeToComparator = typeToComparator;
-        this.signature = new Signature(name, ImmutableList.of(orderableTypeParameter("E")), "array<E>", ImmutableList.of("E", StandardTypes.BIGINT), false, false);
+        this.signature = new Signature(name, AGGREGATE, ImmutableList.of(orderableTypeParameter("E")), "array<E>", ImmutableList.of("E", StandardTypes.BIGINT), false);
     }
 
     @Override
@@ -80,7 +81,7 @@ public abstract class AbstractMinMaxNAggregation
     public FunctionInfo specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
     {
         Type type = types.get("E");
-        Signature signature = new Signature(name, parameterizedTypeName("array", type.getTypeSignature()), type.getTypeSignature(), BIGINT.getTypeSignature());
+        Signature signature = new Signature(name, AGGREGATE, parameterizedTypeName("array", type.getTypeSignature()), type.getTypeSignature(), BIGINT.getTypeSignature());
         InternalAggregationFunction aggregation = generateAggregation(type);
         return new FunctionInfo(signature, getDescription(), aggregation);
     }

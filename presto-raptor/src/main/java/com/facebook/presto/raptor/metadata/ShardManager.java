@@ -14,11 +14,12 @@
 package com.facebook.presto.raptor.metadata;
 
 import com.facebook.presto.raptor.RaptorColumnHandle;
-import com.facebook.presto.raptor.util.CloseableIterator;
 import com.facebook.presto.spi.TupleDomain;
+import org.skife.jdbi.v2.ResultIterator;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -36,32 +37,32 @@ public interface ShardManager
     void commitShards(long tableId, List<ColumnInfo> columns, Collection<ShardInfo> shards, Optional<String> externalBatchId);
 
     /**
-     * Replace oldShardsIds with newShards.
-     */
-    void replaceShardIds(long tableId, List<ColumnInfo> columns, Set<Long> oldShardIds, Collection<ShardInfo> newShards);
-
-    /**
      * Replace oldShardsUuids with newShards.
      */
     void replaceShardUuids(long tableId, List<ColumnInfo> columns, Set<UUID> oldShardUuids, Collection<ShardInfo> newShards);
 
     /**
-     * Get shard metadata for table shards on a given node.
+     * Get shard metadata for shards on a given node.
      */
-    Set<ShardMetadata> getNodeTableShards(String nodeIdentifier, long tableId);
+    Set<ShardMetadata> getNodeShards(String nodeIdentifier);
 
     /**
      * Return the shard nodes a given table.
      */
-    CloseableIterator<ShardNodes> getShardNodes(long tableId, TupleDomain<RaptorColumnHandle> effectivePredicate);
-
-    /**
-     * Return the shards for a given node
-     */
-    Set<UUID> getNodeShards(String nodeIdentifier);
+    ResultIterator<ShardNodes> getShardNodes(long tableId, TupleDomain<RaptorColumnHandle> effectivePredicate);
 
     /**
      * Assign a shard to a node.
      */
     void assignShard(long tableId, UUID shardUuid, String nodeIdentifier);
+
+    /**
+     * Remove shard assignment from a node.
+     */
+    void unassignShard(long tableId, UUID shardUuid, String nodeIdentifier);
+
+    /**
+     * Get the number of bytes used by assigned shards per node.
+     */
+    Map<String, Long> getNodeBytes();
 }

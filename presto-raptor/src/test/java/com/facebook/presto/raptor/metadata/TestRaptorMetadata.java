@@ -23,6 +23,7 @@ import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorMetadata;
 import com.facebook.presto.spi.ConnectorTableHandle;
 import com.facebook.presto.spi.ConnectorTableMetadata;
+import com.facebook.presto.spi.ConnectorViewDefinition;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.SchemaTablePrefix;
@@ -39,6 +40,7 @@ import org.testng.annotations.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import static com.facebook.presto.metadata.MetadataUtil.TableMetadataBuilder.tableMetadataBuilder;
 import static com.facebook.presto.raptor.RaptorTableProperties.ORDERING_PROPERTY;
@@ -75,7 +77,7 @@ public class TestRaptorMetadata
         dbi = new DBI("jdbc:h2:mem:test" + System.nanoTime());
         dbi.registerMapper(new TableColumn.Mapper(typeRegistry));
         dummyHandle = dbi.open();
-        metadata = new RaptorMetadata(new RaptorConnectorId("default"), dbi, new DatabaseShardManager(dbi), SHARD_INFO_CODEC, SHARD_DELTA_CODEC);
+        metadata = new RaptorMetadata(new RaptorConnectorId("raptor"), dbi, new DatabaseShardManager(dbi), SHARD_INFO_CODEC, SHARD_DELTA_CODEC);
     }
 
     @AfterMethod
@@ -304,10 +306,10 @@ public class TestRaptorMetadata
         assertEqualsIgnoreOrder(list, ImmutableList.of(test1, test2));
 
         // verify getting data
-        Map<SchemaTableName, String> views = metadata.getViews(SESSION, new SchemaTablePrefix("test"));
+        Map<SchemaTableName, ConnectorViewDefinition> views = metadata.getViews(SESSION, new SchemaTablePrefix("test"));
         assertEquals(views.keySet(), ImmutableSet.of(test1, test2));
-        assertEquals(views.get(test1), "test1");
-        assertEquals(views.get(test2), "test2");
+        assertEquals(views.get(test1).getViewData(), "test1");
+        assertEquals(views.get(test2).getViewData(), "test2");
 
         // drop first view
         metadata.dropView(SESSION, test1);
@@ -348,7 +350,7 @@ public class TestRaptorMetadata
         metadata.createView(SESSION, test, "aaa", true);
         metadata.createView(SESSION, test, "bbb", true);
 
-        assertEquals(metadata.getViews(SESSION, test.toSchemaTablePrefix()).get(test), "bbb");
+        assertEquals(metadata.getViews(SESSION, test.toSchemaTablePrefix()).get(test).getViewData(), "bbb");
     }
 
     private static ConnectorTableMetadata getOrdersTable()
@@ -377,7 +379,10 @@ public class TestRaptorMetadata
     {
         assertEquals(actual.getTable(), expected.getTable());
 
-        List<ColumnMetadata> actualColumns = actual.getColumns();
+        List<ColumnMetadata> actualColumns = actual.getColumns().stream()
+                .filter(columnMetadata -> !columnMetadata.isHidden())
+                .collect(Collectors.toList());
+
         List<ColumnMetadata> expectedColumns = expected.getColumns();
         assertEquals(actualColumns.size(), expectedColumns.size());
         for (int i = 0; i < actualColumns.size(); i++) {

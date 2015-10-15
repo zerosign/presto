@@ -29,6 +29,7 @@ import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.util.concurrent.ExecutionError;
 import com.google.common.util.concurrent.UncheckedExecutionException;
@@ -38,11 +39,16 @@ import org.apache.hadoop.hive.metastore.TableType;
 import org.apache.hadoop.hive.metastore.Warehouse;
 import org.apache.hadoop.hive.metastore.api.AlreadyExistsException;
 import org.apache.hadoop.hive.metastore.api.Database;
+import org.apache.hadoop.hive.metastore.api.HiveObjectRef;
+import org.apache.hadoop.hive.metastore.api.HiveObjectType;
 import org.apache.hadoop.hive.metastore.api.InvalidObjectException;
 import org.apache.hadoop.hive.metastore.api.InvalidOperationException;
 import org.apache.hadoop.hive.metastore.api.MetaException;
 import org.apache.hadoop.hive.metastore.api.NoSuchObjectException;
 import org.apache.hadoop.hive.metastore.api.Partition;
+import org.apache.hadoop.hive.metastore.api.PrincipalPrivilegeSet;
+import org.apache.hadoop.hive.metastore.api.PrivilegeGrantInfo;
+import org.apache.hadoop.hive.metastore.api.Role;
 import org.apache.hadoop.hive.metastore.api.Table;
 import org.apache.hadoop.hive.metastore.api.UnknownDBException;
 import org.apache.thrift.TException;
@@ -58,6 +64,7 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -67,15 +74,19 @@ import static com.facebook.presto.hive.HiveErrorCode.HIVE_METASTORE_ERROR;
 import static com.facebook.presto.hive.HiveUtil.PRESTO_VIEW_FLAG;
 import static com.facebook.presto.hive.HiveUtil.isPrestoView;
 import static com.facebook.presto.hive.RetryDriver.retry;
+import static com.facebook.presto.hive.metastore.HivePrivilege.OWNERSHIP;
+import static com.facebook.presto.hive.metastore.HivePrivilege.parsePrivilege;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.cache.CacheLoader.asyncReloading;
 import static com.google.common.collect.Iterables.transform;
+import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.function.Function.identity;
 import static java.util.stream.Collectors.toMap;
+import static java.util.stream.Collectors.toSet;
 import static java.util.stream.StreamSupport.stream;
+import static org.apache.hadoop.hive.metastore.api.PrincipalType.USER;
 import static org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.HIVE_FILTER_FIELD_PARAMS;
 
 /**
@@ -95,22 +106,24 @@ public class CachingHiveMetastore
     private final LoadingCache<HiveTableName, Optional<Table>> tableCache;
     private final LoadingCache<HivePartitionName, Optional<Partition>> partitionCache;
     private final LoadingCache<PartitionFilter, Optional<List<String>>> partitionFilterCache;
+    private final LoadingCache<String, Set<String>> userRolesCache;
+    private final LoadingCache<UserTableKey, Set<HivePrivilege>> userTablePrivileges;
 
     @Inject
     public CachingHiveMetastore(HiveCluster hiveCluster, @ForHiveMetastore ExecutorService executor, HiveClientConfig hiveClientConfig)
     {
-        this(checkNotNull(hiveCluster, "hiveCluster is null"),
-                checkNotNull(executor, "executor is null"),
-                checkNotNull(hiveClientConfig, "hiveClientConfig is null").getMetastoreCacheTtl(),
+        this(requireNonNull(hiveCluster, "hiveCluster is null"),
+                requireNonNull(executor, "executor is null"),
+                requireNonNull(hiveClientConfig, "hiveClientConfig is null").getMetastoreCacheTtl(),
                 hiveClientConfig.getMetastoreRefreshInterval());
     }
 
     public CachingHiveMetastore(HiveCluster hiveCluster, ExecutorService executor, Duration cacheTtl, Duration refreshInterval)
     {
-        this.clientProvider = checkNotNull(hiveCluster, "hiveCluster is null");
+        this.clientProvider = requireNonNull(hiveCluster, "hiveCluster is null");
 
-        long expiresAfterWriteMillis = checkNotNull(cacheTtl, "cacheTtl is null").toMillis();
-        long refreshMills = checkNotNull(refreshInterval, "refreshInterval is null").toMillis();
+        long expiresAfterWriteMillis = requireNonNull(cacheTtl, "cacheTtl is null").toMillis();
+        long refreshMills = requireNonNull(refreshInterval, "refreshInterval is null").toMillis();
 
         databaseNamesCache = CacheBuilder.newBuilder()
                 .expireAfterWrite(expiresAfterWriteMillis, MILLISECONDS)
@@ -220,6 +233,32 @@ public class CachingHiveMetastore
                             throws Exception
                     {
                         return loadPartitionsByNames(partitionNames);
+                    }
+                }, executor));
+
+        userRolesCache = CacheBuilder.newBuilder()
+                .expireAfterWrite(expiresAfterWriteMillis, MILLISECONDS)
+                .refreshAfterWrite(refreshMills, MILLISECONDS)
+                .build(asyncReloading(new CacheLoader<String, Set<String>>()
+                {
+                    @Override
+                    public Set<String> load(String user)
+                            throws Exception
+                    {
+                        return loadRoles(user);
+                    }
+                }, executor));
+
+        userTablePrivileges = CacheBuilder.newBuilder()
+                .expireAfterWrite(expiresAfterWriteMillis, MILLISECONDS)
+                .refreshAfterWrite(refreshMills, MILLISECONDS)
+                .build(asyncReloading(new CacheLoader<UserTableKey, Set<HivePrivilege>>()
+                {
+                    @Override
+                    public Set<HivePrivilege> load(UserTableKey key)
+                            throws Exception
+                    {
+                        return loadTablePrivileges(key.getUser(), key.getDatabase(), key.getTable());
                     }
                 }, executor));
     }
@@ -466,22 +505,19 @@ public class CachingHiveMetastore
     }
 
     @Override
-    public void renameTable(String databaseName, String tableName, String newDatabaseName, String newTableName)
+    public void alterTable(String databaseName, String tableName, Table table)
     {
         try {
             retry()
                     .exceptionMapper(getExceptionMapper())
                     .stopOn(InvalidOperationException.class, MetaException.class)
                     .stopOnIllegalExceptions()
-                    .run("renameTable", stats.getRenameTable().wrap(() -> {
+                    .run("alterTable", stats.getAlterTable().wrap(() -> {
                         try (HiveMetastoreClient client = clientProvider.createMetastoreClient()) {
                             Optional<Table> source = loadTable(new HiveTableName(databaseName, tableName));
                             if (!source.isPresent()) {
                                 throw new TableNotFoundException(new SchemaTableName(databaseName, tableName));
                             }
-                            Table table = new Table(source.get());
-                            table.setDbName(newDatabaseName);
-                            table.setTableName(newTableName);
                             client.alter_table(databaseName, tableName, table);
                         }
                         return null;
@@ -504,7 +540,6 @@ public class CachingHiveMetastore
         }
         finally {
             invalidateTable(databaseName, tableName);
-            invalidateTable(newDatabaseName, newTableName);
         }
     }
 
@@ -618,7 +653,7 @@ public class CachingHiveMetastore
     private Optional<Partition> loadPartitionByName(HivePartitionName partitionName)
             throws Exception
     {
-        checkNotNull(partitionName, "partitionName is null");
+        requireNonNull(partitionName, "partitionName is null");
         try {
             return retry()
                     .stopOn(NoSuchObjectException.class)
@@ -643,7 +678,7 @@ public class CachingHiveMetastore
     private Map<HivePartitionName, Optional<Partition>> loadPartitionsByNames(Iterable<? extends HivePartitionName> partitionNames)
             throws Exception
     {
-        checkNotNull(partitionNames, "partitionNames is null");
+        requireNonNull(partitionNames, "partitionNames is null");
         checkArgument(!Iterables.isEmpty(partitionNames), "partitionNames is empty");
 
         HivePartitionName firstPartition = Iterables.get(partitionNames, 0);
@@ -683,6 +718,98 @@ public class CachingHiveMetastore
         catch (TException e) {
             throw new PrestoException(HIVE_METASTORE_ERROR, e);
         }
+    }
+
+    @Override
+    public Set<String> getRoles(String user)
+    {
+        return get(userRolesCache, user);
+    }
+
+    private Set<String> loadRoles(String user)
+    {
+        try (HiveMetastoreClient client = clientProvider.createMetastoreClient()) {
+            List<Role> roles = client.list_roles(user, USER);
+            if (roles == null) {
+                return ImmutableSet.of();
+            }
+            return ImmutableSet.copyOf(roles.stream()
+                    .map(Role::getRoleName)
+                    .collect(toSet()));
+        }
+        catch (TException e) {
+            throw new PrestoException(HIVE_METASTORE_ERROR, e);
+        }
+    }
+
+    @Override
+    public Set<HivePrivilege> getDatabasePrivileges(String user, String databaseName)
+    {
+        ImmutableSet.Builder<HivePrivilege> privileges = ImmutableSet.builder();
+
+        if (isDatabaseOwner(user, databaseName)) {
+            privileges.add(OWNERSHIP);
+        }
+        privileges.addAll(getPrivileges(user, new HiveObjectRef(HiveObjectType.DATABASE, databaseName, null, null, null)));
+
+        return privileges.build();
+    }
+
+    @Override
+    public Set<HivePrivilege> getTablePrivileges(String user, String databaseName, String tableName)
+    {
+        return get(userTablePrivileges, new UserTableKey(user, tableName, databaseName));
+    }
+
+    private Set<HivePrivilege> loadTablePrivileges(String user, String databaseName, String tableName)
+    {
+        ImmutableSet.Builder<HivePrivilege> privileges = ImmutableSet.builder();
+
+        if (isTableOwner(user, databaseName, tableName)) {
+            privileges.add(OWNERSHIP);
+        }
+        privileges.addAll(getPrivileges(user, new HiveObjectRef(HiveObjectType.TABLE, databaseName, tableName, null, null)));
+
+        return privileges.build();
+    }
+
+    private Set<HivePrivilege> getPrivileges(String user, HiveObjectRef objectReference)
+    {
+        ImmutableSet.Builder<HivePrivilege> privileges = ImmutableSet.builder();
+        try (HiveMetastoreClient client = clientProvider.createMetastoreClient()) {
+            PrincipalPrivilegeSet privilegeSet = client.get_privilege_set(objectReference, user, null);
+
+            if (privilegeSet != null) {
+                Map<String, List<PrivilegeGrantInfo>> userPrivileges = privilegeSet.getUserPrivileges();
+                if (userPrivileges != null) {
+                    privileges.addAll(toGrants(userPrivileges.get(user)));
+                }
+                for (List<PrivilegeGrantInfo> rolePrivileges : privilegeSet.getRolePrivileges().values()) {
+                    privileges.addAll(toGrants(rolePrivileges));
+                }
+                // We do not add the group permissions as Hive does not seem to process these
+            }
+        }
+        catch (TException e) {
+            throw new PrestoException(HIVE_METASTORE_ERROR, e);
+        }
+        return privileges.build();
+    }
+
+    private static Set<HivePrivilege> toGrants(List<PrivilegeGrantInfo> userGrants)
+    {
+        if (userGrants == null) {
+            return ImmutableSet.of();
+        }
+
+        ImmutableSet.Builder<HivePrivilege> privileges = ImmutableSet.builder();
+        for (PrivilegeGrantInfo userGrant : userGrants) {
+            privileges.addAll(parsePrivilege(userGrant));
+            if (userGrant.isGrantOption()) {
+                privileges.add(HivePrivilege.GRANT);
+            }
+        }
+        return privileges.build();
     }
 
     private static class HiveTableName
@@ -853,6 +980,66 @@ public class CachingHiveMetastore
         public int hashCode()
         {
             return Objects.hash(hiveTableName, parts);
+        }
+    }
+
+    private static class UserTableKey
+    {
+        private final String user;
+        private final String database;
+        private final String table;
+
+        public UserTableKey(String user, String table, String database)
+        {
+            this.user = requireNonNull(user, "principalName is null");
+            this.table = requireNonNull(table, "table is null");
+            this.database = requireNonNull(database, "database is null");
+        }
+
+        public String getUser()
+        {
+            return user;
+        }
+
+        public String getDatabase()
+        {
+            return database;
+        }
+
+        public String getTable()
+        {
+            return table;
+        }
+
+        @Override
+        public boolean equals(Object o)
+        {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            UserTableKey that = (UserTableKey) o;
+            return Objects.equals(user, that.user) &&
+                    Objects.equals(table, that.table) &&
+                    Objects.equals(database, that.database);
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return Objects.hash(user, table, database);
+        }
+
+        @Override
+        public String toString()
+        {
+            return toStringHelper(this)
+                    .add("principalName", user)
+                    .add("table", table)
+                    .add("database", database)
+                    .toString();
         }
     }
 }

@@ -49,6 +49,10 @@ import java.util.List;
 import java.util.Set;
 
 import static com.facebook.presto.metadata.FunctionRegistry.operatorInfo;
+import static com.facebook.presto.metadata.FunctionType.AGGREGATE;
+import static com.facebook.presto.metadata.FunctionType.APPROXIMATE_AGGREGATE;
+import static com.facebook.presto.metadata.FunctionType.SCALAR;
+import static com.facebook.presto.metadata.FunctionType.WINDOW;
 import static com.facebook.presto.metadata.Signature.typeParameter;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
@@ -56,9 +60,10 @@ import static com.facebook.presto.type.TypeUtils.resolveTypes;
 import static com.google.common.base.CaseFormat.LOWER_CAMEL;
 import static com.google.common.base.CaseFormat.LOWER_UNDERSCORE;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.lang.String.format;
 import static java.lang.invoke.MethodHandles.lookup;
 import static java.util.Locale.ENGLISH;
+import static java.util.Objects.requireNonNull;
 
 public class FunctionListBuilder
 {
@@ -74,13 +79,13 @@ public class FunctionListBuilder
 
     public FunctionListBuilder(TypeManager typeManager)
     {
-        this.typeManager = checkNotNull(typeManager, "typeManager is null");
+        this.typeManager = requireNonNull(typeManager, "typeManager is null");
     }
 
     public FunctionListBuilder window(String name, Type returnType, List<? extends Type> argumentTypes, Class<? extends WindowFunction> functionClass)
     {
         WindowFunctionSupplier windowFunctionSupplier = new ReflectionWindowFunctionSupplier<>(
-                new Signature(name, returnType.getTypeSignature(), Lists.transform(ImmutableList.copyOf(argumentTypes), Type::getTypeSignature)),
+                new Signature(name, WINDOW, returnType.getTypeSignature(), Lists.transform(ImmutableList.copyOf(argumentTypes), Type::getTypeSignature)),
                 functionClass);
 
         functions.add(new FunctionInfo(windowFunctionSupplier.getSignature(), windowFunctionSupplier.getDescription(), windowFunctionSupplier));
@@ -89,7 +94,7 @@ public class FunctionListBuilder
 
     public FunctionListBuilder window(String name, Class<? extends ValueWindowFunction> clazz, String typeVariable, String... argumentTypes)
     {
-        Signature signature = new Signature(name, ImmutableList.of(typeParameter(typeVariable)), typeVariable, ImmutableList.copyOf(argumentTypes), false, false);
+        Signature signature = new Signature(name, WINDOW, ImmutableList.of(typeParameter(typeVariable)), typeVariable, ImmutableList.copyOf(argumentTypes), false);
         functions.add(new ParametricWindowFunction(new ReflectionWindowFunctionSupplier<>(signature, clazz)));
         return this;
     }
@@ -108,7 +113,7 @@ public class FunctionListBuilder
         name = name.toLowerCase(ENGLISH);
 
         String description = getDescription(function.getClass());
-        Signature signature = new Signature(name, function.getFinalType().getTypeSignature(), Lists.transform(ImmutableList.copyOf(function.getParameterTypes()), Type::getTypeSignature));
+        Signature signature = new Signature(name, function.isApproximate() ? APPROXIMATE_AGGREGATE : AGGREGATE, function.getFinalType().getTypeSignature(), Lists.transform(ImmutableList.copyOf(function.getParameterTypes()), Type::getTypeSignature));
         functions.add(new FunctionInfo(signature, description, function));
         return this;
     }
@@ -158,7 +163,7 @@ public class FunctionListBuilder
 
     public FunctionListBuilder function(ParametricFunction parametricFunction)
     {
-        checkNotNull(parametricFunction, "parametricFunction is null");
+        requireNonNull(parametricFunction, "parametricFunction is null");
         functions.add(parametricFunction);
         return this;
     }
@@ -179,7 +184,7 @@ public class FunctionListBuilder
         SqlType returnTypeAnnotation = method.getAnnotation(SqlType.class);
         checkArgument(returnTypeAnnotation != null, "Method %s return type does not have a @SqlType annotation", method);
         Type returnType = type(typeManager, returnTypeAnnotation);
-        Signature signature = new Signature(name.toLowerCase(ENGLISH), returnType.getTypeSignature(), Lists.transform(parameterTypes(typeManager, method), Type::getTypeSignature));
+        Signature signature = new Signature(name.toLowerCase(ENGLISH), SCALAR, returnType.getTypeSignature(), Lists.transform(parameterTypes(typeManager, method), Type::getTypeSignature));
 
         verifyMethodSignature(method, signature.getReturnType(), signature.getArgumentTypes(), typeManager);
 
@@ -195,7 +200,7 @@ public class FunctionListBuilder
     private static Type type(TypeManager typeManager, SqlType explicitType)
     {
         Type type = typeManager.getType(parseTypeSignature(explicitType.value()));
-        checkNotNull(type, "No type found for '%s'", explicitType.value());
+        requireNonNull(type, format("No type found for '%s'", explicitType.value()));
         return type;
     }
 
@@ -228,7 +233,7 @@ public class FunctionListBuilder
     private static void verifyMethodSignature(Method method, TypeSignature returnTypeName, List<TypeSignature> argumentTypeNames, TypeManager typeManager)
     {
         Type returnType = typeManager.getType(returnTypeName);
-        checkNotNull(returnType, "returnType is null");
+        requireNonNull(returnType, "returnType is null");
         List<Type> argumentTypes = resolveTypes(argumentTypeNames, typeManager);
         checkArgument(Primitives.unwrap(method.getReturnType()) == returnType.getJavaType(),
                 "Expected method %s return type to be %s (%s)",

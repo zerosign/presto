@@ -14,10 +14,8 @@
 package com.facebook.presto.raptor.storage;
 
 import com.facebook.presto.metadata.InMemoryNodeManager;
-import com.facebook.presto.orc.LongVector;
 import com.facebook.presto.orc.OrcDataSource;
 import com.facebook.presto.orc.OrcRecordReader;
-import com.facebook.presto.orc.SliceVector;
 import com.facebook.presto.raptor.RaptorColumnHandle;
 import com.facebook.presto.raptor.backup.BackupManager;
 import com.facebook.presto.raptor.backup.BackupStore;
@@ -31,6 +29,7 @@ import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.NodeManager;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.type.SqlDate;
 import com.facebook.presto.spi.type.SqlTimestamp;
 import com.facebook.presto.spi.type.SqlVarbinary;
@@ -60,6 +59,7 @@ import java.util.BitSet;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -102,15 +102,13 @@ public class TestOrcStorageManager
     private static final ISOChronology UTC_CHRONOLOGY = ISOChronology.getInstance(UTC);
     private static final DateTime EPOCH = new DateTime(0, UTC_CHRONOLOGY);
     private static final String CURRENT_NODE = "node";
-    private static final DataSize ORC_MAX_MERGE_DISTANCE = new DataSize(1, MEGABYTE);
-    private static final DataSize ORC_MAX_READ_SIZE = new DataSize(1, MEGABYTE);
-    private static final DataSize ORC_STREAM_BUFFER_SIZE = new DataSize(1, MEGABYTE);
     private static final String CONNECTOR_ID = "test";
     private static final int DELETION_THREADS = 2;
     private static final Duration SHARD_RECOVERY_TIMEOUT = new Duration(30, TimeUnit.SECONDS);
     private static final int MAX_SHARD_ROWS = 100;
     private static final DataSize MAX_FILE_SIZE = new DataSize(1, MEGABYTE);
     private static final Duration MISSING_SHARD_DISCOVERY = new Duration(5, TimeUnit.MINUTES);
+    private static final ReaderAttributes READER_ATTRIBUTES = new ReaderAttributes(new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE));
 
     private final NodeManager nodeManager = new InMemoryNodeManager();
     private Handle dummyHandle;
@@ -208,24 +206,22 @@ public class TestOrcStorageManager
         assertTrue(file.getParentFile().delete());
         assertFalse(file.exists());
 
-        recoveryManager.restoreFromBackup(shardUuid);
+        recoveryManager.restoreFromBackup(shardUuid, OptionalLong.empty());
 
-        try (OrcDataSource dataSource = manager.openShard(shardUuid)) {
+        try (OrcDataSource dataSource = manager.openShard(shardUuid, READER_ATTRIBUTES)) {
             OrcRecordReader reader = createReader(dataSource, columnIds, columnTypes);
 
             assertEquals(reader.nextBatch(), 2);
 
-            LongVector longVector = new LongVector(2);
-            reader.readVector(0, longVector);
-            assertEquals(longVector.isNull[0], false);
-            assertEquals(longVector.isNull[1], false);
-            assertEquals(longVector.vector[0], 123L);
-            assertEquals(longVector.vector[1], 456L);
+            Block column0 = reader.readBlock(BIGINT, 0);
+            assertEquals(column0.isNull(0), false);
+            assertEquals(column0.isNull(1), false);
+            assertEquals(BIGINT.getLong(column0, 0), 123L);
+            assertEquals(BIGINT.getLong(column0, 1), 456L);
 
-            SliceVector stringVector = new SliceVector(2);
-            reader.readVector(1, stringVector);
-            assertEquals(stringVector.vector[0], utf8Slice("hello"));
-            assertEquals(stringVector.vector[1], utf8Slice("bye"));
+            Block column1 = reader.readBlock(VARCHAR, 1);
+            assertEquals(VARCHAR.getSlice(column1, 0), utf8Slice("hello"));
+            assertEquals(VARCHAR.getSlice(column1, 1), utf8Slice("bye"));
 
             assertEquals(reader.nextBatch(), -1);
         }
@@ -278,7 +274,7 @@ public class TestOrcStorageManager
         // no tuple domain (all)
         TupleDomain<RaptorColumnHandle> tupleDomain = TupleDomain.all();
 
-        try (ConnectorPageSource pageSource = manager.getPageSource(uuid, columnIds, columnTypes, tupleDomain)) {
+        try (ConnectorPageSource pageSource = manager.getPageSource(uuid, columnIds, columnTypes, tupleDomain, READER_ATTRIBUTES)) {
             MaterializedResult result = materializeSourceDataStream(SESSION, pageSource, columnTypes);
             assertEquals(result.getRowCount(), expected.getRowCount());
             assertEquals(result, expected);
@@ -289,7 +285,7 @@ public class TestOrcStorageManager
                 .put(new RaptorColumnHandle("test", "c1", 2, BIGINT), 124L)
                 .build());
 
-        try (ConnectorPageSource pageSource = manager.getPageSource(uuid, columnIds, columnTypes, tupleDomain)) {
+        try (ConnectorPageSource pageSource = manager.getPageSource(uuid, columnIds, columnTypes, tupleDomain, READER_ATTRIBUTES)) {
             MaterializedResult result = materializeSourceDataStream(SESSION, pageSource, columnTypes);
             assertEquals(result.getRowCount(), expected.getRowCount());
         }
@@ -299,7 +295,7 @@ public class TestOrcStorageManager
                 .put(new RaptorColumnHandle("test", "c1", 2, BIGINT), 122L)
                 .build());
 
-        try (ConnectorPageSource pageSource = manager.getPageSource(uuid, columnIds, columnTypes, tupleDomain)) {
+        try (ConnectorPageSource pageSource = manager.getPageSource(uuid, columnIds, columnTypes, tupleDomain, READER_ATTRIBUTES)) {
             MaterializedResult result = materializeSourceDataStream(SESSION, pageSource, columnTypes);
             assertEquals(result.getRowCount(), 0);
         }
@@ -530,9 +526,7 @@ public class TestOrcStorageManager
                 storageService,
                 backupStore,
                 SHARD_DELTA_CODEC,
-                ORC_MAX_MERGE_DISTANCE,
-                ORC_MAX_READ_SIZE,
-                ORC_STREAM_BUFFER_SIZE,
+                READER_ATTRIBUTES,
                 new BackupManager(backupStore, 1),
                 recoveryManager,
                 new TypeRegistry(),

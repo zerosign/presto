@@ -15,6 +15,7 @@ package com.facebook.presto.execution;
 
 import com.facebook.presto.OutputBuffers;
 import com.facebook.presto.Session;
+import com.facebook.presto.execution.NodeTaskMap.SplitCountChangeListener;
 import com.facebook.presto.memory.MemoryPool;
 import com.facebook.presto.memory.MemoryPoolId;
 import com.facebook.presto.memory.QueryContext;
@@ -37,6 +38,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.Multimap;
 import io.airlift.units.DataSize;
 import org.joda.time.DateTime;
@@ -58,9 +60,9 @@ import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
 import static com.facebook.presto.execution.StateMachine.StateChangeListener;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.util.Failures.toFailures;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
+import static java.util.Objects.requireNonNull;
 
 public class MockRemoteTaskFactory
         implements RemoteTaskFactory
@@ -72,7 +74,7 @@ public class MockRemoteTaskFactory
         this.executor = executor;
     }
 
-    public RemoteTask createTableScanTask(Node newNode, List<Split> splits)
+    public RemoteTask createTableScanTask(Node newNode, List<Split> splits, SplitCountChangeListener splitCountChangeListener)
     {
         TaskId taskId = new TaskId(new StageId("test", "1"), "1");
         Symbol symbol = new Symbol("column");
@@ -102,7 +104,7 @@ public class MockRemoteTaskFactory
         for (Split sourceSplit : splits) {
             initialSplits.put(sourceId, sourceSplit);
         }
-        return createRemoteTask(TEST_SESSION, taskId, newNode, testFragment, initialSplits.build(), OutputBuffers.INITIAL_EMPTY_OUTPUT_BUFFERS);
+        return createRemoteTask(TEST_SESSION, taskId, newNode, testFragment, initialSplits.build(), OutputBuffers.INITIAL_EMPTY_OUTPUT_BUFFERS, splitCountChangeListener);
     }
 
     @Override
@@ -112,9 +114,10 @@ public class MockRemoteTaskFactory
             Node node,
             PlanFragment fragment,
             Multimap<PlanNodeId, Split> initialSplits,
-            OutputBuffers outputBuffers)
+            OutputBuffers outputBuffers,
+            SplitCountChangeListener splitCountChangeListener)
     {
-        return new MockRemoteTask(taskId, fragment, node.getNodeIdentifier(), executor, initialSplits);
+        return new MockRemoteTask(taskId, fragment, node.getNodeIdentifier(), executor, initialSplits, splitCountChangeListener);
     }
 
     public static class MockRemoteTask
@@ -136,13 +139,16 @@ public class MockRemoteTaskFactory
         @GuardedBy("this")
         private final Multimap<PlanNodeId, Split> splits = HashMultimap.create();
 
+        private final SplitCountChangeListener splitCountChangeListener;
+
         public MockRemoteTask(TaskId taskId,
                 PlanFragment fragment,
                 String nodeId,
                 Executor executor,
-                Multimap<PlanNodeId, Split> initialSplits)
+                Multimap<PlanNodeId, Split> initialSplits,
+                SplitCountChangeListener splitCountChangeListener)
         {
-            this.taskStateMachine = new TaskStateMachine(checkNotNull(taskId, "taskId is null"), checkNotNull(executor, "executor is null"));
+            this.taskStateMachine = new TaskStateMachine(requireNonNull(taskId, "taskId is null"), requireNonNull(executor, "executor is null"));
 
             MemoryPool memoryPool = new MemoryPool(new MemoryPoolId("test"), new DataSize(1, GIGABYTE));
             MemoryPool memorySystemPool = new MemoryPool(new MemoryPoolId("testSystem"), new DataSize(1, GIGABYTE));
@@ -150,10 +156,12 @@ public class MockRemoteTaskFactory
 
             this.location = URI.create("fake://task/" + taskId);
 
-            this.sharedBuffer = new SharedBuffer(taskId, executor, checkNotNull(new DataSize(1, DataSize.Unit.BYTE), "maxBufferSize is null"));
-            this.fragment = checkNotNull(fragment, "fragment is null");
-            this.nodeId = checkNotNull(nodeId, "nodeId is null");
+            this.sharedBuffer = new SharedBuffer(taskId, executor, requireNonNull(new DataSize(1, DataSize.Unit.BYTE), "maxBufferSize is null"));
+            this.fragment = requireNonNull(fragment, "fragment is null");
+            this.nodeId = requireNonNull(nodeId, "nodeId is null");
             splits.putAll(initialSplits);
+            this.splitCountChangeListener = requireNonNull(splitCountChangeListener, "splitCountChangeListener is null");
+            this.splitCountChangeListener.splitCountChanged(initialSplits.size());
         }
 
         @Override
@@ -190,8 +198,9 @@ public class MockRemoteTaskFactory
                     failures);
         }
 
-        public void clearSplits()
+        public synchronized void clearSplits()
         {
+            splitCountChangeListener.splitCountChanged(-splits.size());
             splits.clear();
         }
 
@@ -201,12 +210,13 @@ public class MockRemoteTaskFactory
         }
 
         @Override
-        public void addSplits(PlanNodeId sourceId, Iterable<Split> splits)
+        public synchronized void addSplits(PlanNodeId sourceId, Iterable<Split> splits)
         {
-            checkNotNull(splits, "splits is null");
+            requireNonNull(splits, "splits is null");
             for (Split split : splits) {
                 this.splits.put(sourceId, split);
             }
+            splitCountChangeListener.splitCountChanged(Iterables.size(splits));
         }
 
         @Override
@@ -233,7 +243,15 @@ public class MockRemoteTaskFactory
         @Override
         public void addStateChangeListener(StateChangeListener<TaskInfo> stateChangeListener)
         {
-            taskStateMachine.addStateChangeListener(newValue -> stateChangeListener.stateChanged(getTaskInfo()));
+            taskStateMachine.addStateChangeListener(newValue -> {
+                if (newValue.isDone()) {
+                    synchronized (this) {
+                        splitCountChangeListener.splitCountChanged(-splits.size());
+                        splits.clear();
+                    }
+                }
+                stateChangeListener.stateChanged(getTaskInfo());
+            });
         }
 
         @Override
@@ -249,13 +267,15 @@ public class MockRemoteTaskFactory
         }
 
         @Override
-        public void abort()
+        public synchronized void abort()
         {
             taskStateMachine.abort();
+            splitCountChangeListener.splitCountChanged(-splits.size());
+            splits.clear();
         }
 
         @Override
-        public int getPartitionedSplitCount()
+        public synchronized int getPartitionedSplitCount()
         {
             if (taskStateMachine.getState().isDone()) {
                 return 0;
@@ -264,13 +284,12 @@ public class MockRemoteTaskFactory
         }
 
         @Override
-        public int getQueuedPartitionedSplitCount()
+        public synchronized int getQueuedPartitionedSplitCount()
         {
             if (taskStateMachine.getState().isDone()) {
                 return 0;
             }
             return splits.size();
         }
-
     }
 }

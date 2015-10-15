@@ -16,6 +16,7 @@ package com.facebook.presto.tests;
 import com.facebook.presto.Session;
 import com.facebook.presto.index.IndexManager;
 import com.facebook.presto.metadata.Metadata;
+import com.facebook.presto.spi.security.AccessDeniedException;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.analyzer.QueryExplainer;
@@ -26,6 +27,7 @@ import com.facebook.presto.sql.tree.ExplainType;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.MaterializedRow;
 import com.facebook.presto.testing.QueryRunner;
+import com.facebook.presto.testing.TestingAccessControlManager.TestingPrivilege;
 import com.google.common.base.Function;
 import com.google.common.collect.ImmutableMap;
 import org.intellij.lang.annotations.Language;
@@ -33,7 +35,9 @@ import org.testng.annotations.AfterClass;
 
 import java.util.List;
 
+import static java.lang.String.format;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.fail;
 
 public abstract class AbstractTestQueryFramework
 {
@@ -83,7 +87,13 @@ public abstract class AbstractTestQueryFramework
     protected void assertQuery(@Language("SQL") String sql)
             throws Exception
     {
-        QueryAssertions.assertQuery(queryRunner, getSession(), sql, h2QueryRunner, sql, false);
+        assertQuery(getSession(), sql);
+    }
+
+    protected void assertQuery(Session session, @Language("SQL") String sql)
+            throws Exception
+    {
+        QueryAssertions.assertQuery(queryRunner, session, sql, h2QueryRunner, sql, false);
     }
 
     public void assertQueryOrdered(@Language("SQL") String sql)
@@ -96,6 +106,12 @@ public abstract class AbstractTestQueryFramework
             throws Exception
     {
         QueryAssertions.assertQuery(queryRunner, getSession(), actual, h2QueryRunner, expected, false);
+    }
+
+    protected void assertQuery(Session session, @Language("SQL") String actual, @Language("SQL") String expected)
+            throws Exception
+    {
+        QueryAssertions.assertQuery(queryRunner, session, actual, h2QueryRunner, expected, false);
     }
 
     protected void assertQueryOrdered(@Language("SQL") String actual, @Language("SQL") String expected)
@@ -124,6 +140,62 @@ public abstract class AbstractTestQueryFramework
                 actual,
                 h2QueryRunner,
                 expected);
+    }
+
+    protected void assertAccessAllowed(@Language("SQL") String sql, TestingPrivilege... deniedPrivileges)
+            throws Exception
+    {
+        assertAccessAllowed(getSession(), sql, deniedPrivileges);
+    }
+
+    protected void assertAccessAllowed(Session session, @Language("SQL") String sql, TestingPrivilege... deniedPrivileges)
+            throws Exception
+    {
+        queryRunner.getExclusiveLock().lock();
+        try {
+            queryRunner.getAccessControl().deny(deniedPrivileges);
+            queryRunner.execute(session, sql);
+        }
+        finally {
+            queryRunner.getAccessControl().reset();
+            queryRunner.getExclusiveLock().unlock();
+        }
+    }
+
+    protected void assertAccessDenied(@Language("SQL") String sql, @Language("RegExp") String exceptionsMessageRegExp, TestingPrivilege... deniedPrivileges)
+            throws Exception
+    {
+        assertAccessDenied(getSession(), sql, exceptionsMessageRegExp, deniedPrivileges);
+    }
+
+    protected void assertAccessDenied(
+            Session session,
+            @Language("SQL") String sql,
+            @Language("RegExp") String exceptionsMessageRegExp,
+            TestingPrivilege... deniedPrivileges)
+            throws Exception
+    {
+        queryRunner.getExclusiveLock().lock();
+        try {
+            queryRunner.getAccessControl().deny(deniedPrivileges);
+            queryRunner.execute(session, sql);
+            fail("Expected " + AccessDeniedException.class.getSimpleName());
+        }
+        catch (RuntimeException e) {
+            assertExceptionMessage(e, exceptionsMessageRegExp);
+        }
+        finally {
+            queryRunner.getAccessControl().reset();
+            queryRunner.getExclusiveLock().unlock();
+        }
+    }
+
+    private static void assertExceptionMessage(Exception exception, @Language("RegExp") String exceptionMessagePattern)
+    {
+        String regex = ".*Access Denied: " + exceptionMessagePattern;
+        if (!exception.getMessage().matches(regex)) {
+            fail(format("Expected exception message '%s' to match '%s'", exception.getMessage(), regex));
+        }
     }
 
     protected MaterializedResult computeExpected(@Language("SQL") String sql, List<? extends Type> resultTypes)
@@ -165,6 +237,7 @@ public abstract class AbstractTestQueryFramework
         return new QueryExplainer(
                 optimizers,
                 metadata,
+                queryRunner.getAccessControl(),
                 sqlParser,
                 ImmutableMap.of(),
                 featuresConfig.isExperimentalSyntaxEnabled());

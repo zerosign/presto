@@ -15,16 +15,13 @@ package com.facebook.presto.raptor.metadata;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
-import io.airlift.dbpool.H2EmbeddedDataSource;
-import io.airlift.dbpool.H2EmbeddedDataSourceConfig;
 import org.skife.jdbi.v2.DBI;
 import org.skife.jdbi.v2.Handle;
+import org.skife.jdbi.v2.IDBI;
 import org.skife.jdbi.v2.exceptions.UnableToExecuteStatementException;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
-
-import javax.sql.DataSource;
 
 import java.sql.SQLException;
 import java.util.List;
@@ -43,25 +40,23 @@ import static org.testng.Assert.fail;
 public class TestShardManagerDao
 {
     private ShardManagerDao dao;
-    private Handle handle;
+    private IDBI dbi;
+    private Handle dummyHandle;
 
     @BeforeMethod
     public void setup()
             throws Exception
     {
-        H2EmbeddedDataSourceConfig dataSourceConfig = new H2EmbeddedDataSourceConfig().setFilename("mem:");
-        DataSource dataSource = new H2EmbeddedDataSource(dataSourceConfig);
-        DBI h2Dbi = new DBI(dataSource);
-        handle = h2Dbi.open();
-        dao = handle.attach(ShardManagerDao.class);
-
-        createShardTablesWithRetry(dao);
+        dbi = new DBI("jdbc:h2:mem:test" + System.nanoTime());
+        dummyHandle = dbi.open();
+        dao = dbi.onDemand(ShardManagerDao.class);
+        createShardTablesWithRetry(dbi);
     }
 
-    @AfterMethod
+    @AfterMethod(alwaysRun = true)
     public void teardown()
     {
-        handle.close();
+        dummyHandle.close();
     }
 
     @Test
@@ -109,9 +104,9 @@ public class TestShardManagerDao
     {
         long shardId = dao.insertShard(UUID.randomUUID(), 5, 13, 42, 84);
 
-        List<Map<String, Object>> shards = handle.select(
-                "SELECT table_id , row_count, compressed_size, uncompressed_size FROM shards WHERE shard_id = ?",
-                shardId);
+        String sql = "SELECT table_id, row_count, compressed_size, uncompressed_size " +
+                "FROM shards WHERE shard_id = ?";
+        List<Map<String, Object>> shards = dbi.withHandle(handle -> handle.select(sql, shardId));
 
         assertEquals(shards.size(), 1);
         Map<String, Object> shard = shards.get(0);
@@ -163,10 +158,10 @@ public class TestShardManagerDao
 
         long tableId = 1;
 
-        long shardId1 = dao.insertShard(shardUuid1, tableId, 0, 0, 0);
-        long shardId2 = dao.insertShard(shardUuid2, tableId, 0, 0, 0);
-        long shardId3 = dao.insertShard(shardUuid3, tableId, 0, 0, 0);
-        long shardId4 = dao.insertShard(shardUuid4, tableId, 0, 0, 0);
+        long shardId1 = dao.insertShard(shardUuid1, tableId, 1, 11, 111);
+        long shardId2 = dao.insertShard(shardUuid2, tableId, 2, 22, 222);
+        long shardId3 = dao.insertShard(shardUuid3, tableId, 3, 33, 333);
+        long shardId4 = dao.insertShard(shardUuid4, tableId, 4, 44, 444);
 
         assertEquals(dao.getShards(tableId), ImmutableList.of(shardUuid1, shardUuid2, shardUuid3, shardUuid4));
 
@@ -180,8 +175,13 @@ public class TestShardManagerDao
         dao.insertShardNode(shardId1, nodeId2);
         dao.insertShardNode(shardId4, nodeId2);
 
-        assertEquals(dao.getNodeShards(nodeName1), ImmutableList.of(shardUuid1, shardUuid2, shardUuid3, shardUuid4));
-        assertEquals(dao.getNodeShards(nodeName2), ImmutableList.of(shardUuid1, shardUuid4));
+        ShardMetadata shard1 = new ShardMetadata(tableId, shardId1, shardUuid1, 1, 11, 111);
+        ShardMetadata shard2 = new ShardMetadata(tableId, shardId2, shardUuid2, 2, 22, 222);
+        ShardMetadata shard3 = new ShardMetadata(tableId, shardId3, shardUuid3, 3, 33, 333);
+        ShardMetadata shard4 = new ShardMetadata(tableId, shardId4, shardUuid4, 4, 44, 444);
+
+        assertEquals(dao.getNodeShards(nodeName1), ImmutableSet.of(shard1, shard2, shard3, shard4));
+        assertEquals(dao.getNodeShards(nodeName2), ImmutableSet.of(shard1, shard4));
 
         dao.dropShardNodes(tableId);
 

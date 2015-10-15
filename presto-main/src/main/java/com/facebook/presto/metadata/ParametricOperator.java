@@ -18,7 +18,8 @@ import com.google.common.collect.ImmutableList;
 import java.util.List;
 
 import static com.facebook.presto.metadata.FunctionRegistry.mangleOperatorName;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static com.facebook.presto.metadata.FunctionType.SCALAR;
+import static java.util.Objects.requireNonNull;
 
 public abstract class ParametricOperator
         implements ParametricFunction
@@ -30,28 +31,16 @@ public abstract class ParametricOperator
 
     protected ParametricOperator(OperatorType operatorType, List<TypeParameter> typeParameters, String returnType, List<String> argumentTypes)
     {
-        this.typeParameters = ImmutableList.copyOf(checkNotNull(typeParameters, "typeParameters is null"));
-        this.returnType = checkNotNull(returnType, "returnType is null");
-        this.argumentTypes = ImmutableList.copyOf(checkNotNull(argumentTypes, "argumentTypes is null"));
-        this.operatorType = checkNotNull(operatorType, "operatorType is null");
+        this.typeParameters = ImmutableList.copyOf(requireNonNull(typeParameters, "typeParameters is null"));
+        this.returnType = requireNonNull(returnType, "returnType is null");
+        this.argumentTypes = ImmutableList.copyOf(requireNonNull(argumentTypes, "argumentTypes is null"));
+        this.operatorType = requireNonNull(operatorType, "operatorType is null");
     }
 
     @Override
     public Signature getSignature()
     {
-        return new Signature(mangleOperatorName(operatorType), typeParameters, returnType, argumentTypes, false, true);
-    }
-
-    @Override
-    public final boolean isScalar()
-    {
-        return true;
-    }
-
-    @Override
-    public final boolean isAggregate()
-    {
-        return false;
+        return new Signature(mangleOperatorName(operatorType), SCALAR, typeParameters, returnType, argumentTypes, false);
     }
 
     @Override
@@ -61,25 +50,7 @@ public abstract class ParametricOperator
     }
 
     @Override
-    public final boolean isApproximate()
-    {
-        return false;
-    }
-
-    @Override
-    public final boolean isWindow()
-    {
-        return false;
-    }
-
-    @Override
     public final boolean isDeterministic()
-    {
-        return true;
-    }
-
-    @Override
-    public final boolean isUnbound()
     {
         return true;
     }

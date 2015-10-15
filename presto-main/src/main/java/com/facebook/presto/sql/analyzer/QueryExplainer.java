@@ -16,6 +16,7 @@ package com.facebook.presto.sql.analyzer;
 import com.facebook.presto.Session;
 import com.facebook.presto.execution.DataDefinitionTask;
 import com.facebook.presto.metadata.Metadata;
+import com.facebook.presto.security.AccessControl;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.LogicalPlanner;
 import com.facebook.presto.sql.planner.Plan;
@@ -34,12 +35,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class QueryExplainer
 {
     private final List<PlanOptimizer> planOptimizers;
     private final Metadata metadata;
+    private final AccessControl accessControl;
     private final SqlParser sqlParser;
     private final boolean experimentalSyntaxEnabled;
     private final Map<Class<? extends Statement>, DataDefinitionTask<?>> dataDefinitionTask;
@@ -48,12 +50,14 @@ public class QueryExplainer
     public QueryExplainer(
             List<PlanOptimizer> planOptimizers,
             Metadata metadata,
+            AccessControl accessControl,
             SqlParser sqlParser,
             Map<Class<? extends Statement>, DataDefinitionTask<?>> dataDefinitionTask,
             FeaturesConfig featuresConfig)
     {
         this(planOptimizers,
                 metadata,
+                accessControl,
                 sqlParser,
                 dataDefinitionTask,
                 featuresConfig.isExperimentalSyntaxEnabled());
@@ -62,15 +66,17 @@ public class QueryExplainer
     public QueryExplainer(
             List<PlanOptimizer> planOptimizers,
             Metadata metadata,
+            AccessControl accessControl,
             SqlParser sqlParser,
             Map<Class<? extends Statement>, DataDefinitionTask<?>> dataDefinitionTask,
             boolean experimentalSyntaxEnabled)
     {
-        this.planOptimizers = checkNotNull(planOptimizers, "planOptimizers is null");
-        this.metadata = checkNotNull(metadata, "metadata is null");
-        this.sqlParser = checkNotNull(sqlParser, "sqlParser is null");
+        this.planOptimizers = requireNonNull(planOptimizers, "planOptimizers is null");
+        this.metadata = requireNonNull(metadata, "metadata is null");
+        this.accessControl = requireNonNull(accessControl, "accessControl is null");
+        this.sqlParser = requireNonNull(sqlParser, "sqlParser is null");
         this.experimentalSyntaxEnabled = experimentalSyntaxEnabled;
-        this.dataDefinitionTask = ImmutableMap.copyOf(checkNotNull(dataDefinitionTask, "dataDefinitionTask is null"));
+        this.dataDefinitionTask = ImmutableMap.copyOf(requireNonNull(dataDefinitionTask, "dataDefinitionTask is null"));
     }
 
     public String getPlan(Session session, Statement statement, Type planType)
@@ -115,21 +121,10 @@ public class QueryExplainer
         throw new IllegalArgumentException("Unhandled plan type: " + planType);
     }
 
-    public String getJsonPlan(Session session, Statement statement)
-    {
-        DataDefinitionTask<?> task = dataDefinitionTask.get(statement.getClass());
-        if (task != null) {
-            return "{}";
-        }
-
-        Plan plan = getLogicalPlan(session, statement);
-        return PlanPrinter.getJsonPlanSource(plan.getRoot(), metadata, null);
-    }
-
     private Plan getLogicalPlan(Session session, Statement statement)
     {
         // analyze statement
-        Analyzer analyzer = new Analyzer(session, metadata, sqlParser, Optional.of(this), experimentalSyntaxEnabled);
+        Analyzer analyzer = new Analyzer(session, metadata, sqlParser, accessControl, Optional.of(this), experimentalSyntaxEnabled);
 
         Analysis analysis = analyzer.analyze(statement);
         PlanNodeIdAllocator idAllocator = new PlanNodeIdAllocator();
@@ -142,7 +137,7 @@ public class QueryExplainer
     private SubPlan getDistributedPlan(Session session, Statement statement)
     {
         // analyze statement
-        Analyzer analyzer = new Analyzer(session, metadata, sqlParser, Optional.of(this), experimentalSyntaxEnabled);
+        Analyzer analyzer = new Analyzer(session, metadata, sqlParser, accessControl, Optional.of(this), experimentalSyntaxEnabled);
 
         Analysis analysis = analyzer.analyze(statement);
         PlanNodeIdAllocator idAllocator = new PlanNodeIdAllocator();

@@ -14,7 +14,6 @@
 package com.facebook.presto.raptor.metadata;
 
 import com.facebook.presto.raptor.RaptorColumnHandle;
-import com.facebook.presto.raptor.util.CloseableIterator;
 import com.facebook.presto.raptor.util.UuidUtil.UuidArgument;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.TupleDomain;
@@ -25,6 +24,7 @@ import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Maps;
 import com.google.common.util.concurrent.ExecutionError;
@@ -33,7 +33,7 @@ import org.h2.jdbc.JdbcConnection;
 import org.skife.jdbi.v2.Handle;
 import org.skife.jdbi.v2.IDBI;
 import org.skife.jdbi.v2.Query;
-import org.skife.jdbi.v2.TransactionCallback;
+import org.skife.jdbi.v2.ResultIterator;
 import org.skife.jdbi.v2.exceptions.DBIException;
 import org.skife.jdbi.v2.util.ByteArrayMapper;
 import org.skife.jdbi.v2.util.LongMapper;
@@ -46,6 +46,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -61,17 +62,19 @@ import static com.facebook.presto.raptor.metadata.SqlUtils.runIgnoringConstraint
 import static com.facebook.presto.raptor.storage.ShardStats.MAX_BINARY_INDEX_SIZE;
 import static com.facebook.presto.raptor.util.ArrayUtil.intArrayFromBytes;
 import static com.facebook.presto.raptor.util.ArrayUtil.intArrayToBytes;
+import static com.facebook.presto.raptor.util.DatabaseUtil.metadataError;
+import static com.facebook.presto.raptor.util.DatabaseUtil.onDemandDao;
+import static com.facebook.presto.raptor.util.DatabaseUtil.runTransaction;
 import static com.facebook.presto.raptor.util.UuidUtil.uuidToBytes;
 import static com.facebook.presto.spi.StandardErrorCode.INTERNAL_ERROR;
 import static com.facebook.presto.spi.StandardErrorCode.TRANSACTION_CONFLICT;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Throwables.propagateIfInstanceOf;
 import static com.google.common.collect.Iterables.partition;
 import static java.lang.String.format;
 import static java.sql.Statement.RETURN_GENERATED_KEYS;
 import static java.util.Arrays.asList;
 import static java.util.Collections.nCopies;
+import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toSet;
 
 public class DatabaseShardManager
@@ -96,11 +99,11 @@ public class DatabaseShardManager
     @Inject
     public DatabaseShardManager(@ForMetadata IDBI dbi)
     {
-        this.dbi = checkNotNull(dbi, "dbi is null");
-        this.dao = dbi.onDemand(ShardManagerDao.class);
+        this.dbi = requireNonNull(dbi, "dbi is null");
+        this.dao = onDemandDao(dbi, ShardManagerDao.class);
 
         // keep retrying if database is unavailable when the server starts
-        createShardTablesWithRetry(dao);
+        createShardTablesWithRetry(dbi);
     }
 
     @Override
@@ -128,6 +131,9 @@ public class DatabaseShardManager
         try (Handle handle = dbi.open()) {
             handle.execute(sql);
         }
+        catch (DBIException e) {
+            throw metadataError(e);
+        }
     }
 
     @Override
@@ -140,7 +146,7 @@ public class DatabaseShardManager
 
         Map<String, Integer> nodeIds = toNodeIdMap(shards);
 
-        dbi.inTransaction((handle, status) -> {
+        runTransaction(dbi, (handle, status) -> {
             ShardManagerDao dao = handle.attach(ShardManagerDao.class);
 
             insertShardsAndIndex(tableId, columns, shards, nodeIds, handle);
@@ -153,23 +159,11 @@ public class DatabaseShardManager
     }
 
     @Override
-    public void replaceShardIds(long tableId, List<ColumnInfo> columns, Set<Long> oldShardIds, Collection<ShardInfo> newShards)
-    {
-        Map<String, Integer> nodeIds = toNodeIdMap(newShards);
-
-        runTransaction((handle, status) -> {
-            insertShardsAndIndex(tableId, columns, newShards, nodeIds, handle);
-            deleteShardsAndIndex(tableId, oldShardIds, handle);
-            return null;
-        });
-    }
-
-    @Override
     public void replaceShardUuids(long tableId, List<ColumnInfo> columns, Set<UUID> oldShardUuids, Collection<ShardInfo> newShards)
     {
         Map<String, Integer> nodeIds = toNodeIdMap(newShards);
 
-        runTransaction((handle, status) -> {
+        runTransaction(dbi, (handle, status) -> {
             for (List<ShardInfo> shards : partition(newShards, 1000)) {
                 insertShardsAndIndex(tableId, columns, shards, nodeIds, handle);
             }
@@ -269,21 +263,15 @@ public class DatabaseShardManager
     }
 
     @Override
-    public Set<ShardMetadata> getNodeTableShards(String nodeIdentifier, long tableId)
-    {
-        return dao.getNodeTableShards(nodeIdentifier, tableId);
-    }
-
-    @Override
-    public CloseableIterator<ShardNodes> getShardNodes(long tableId, TupleDomain<RaptorColumnHandle> effectivePredicate)
-    {
-        return new ShardIterator(tableId, effectivePredicate, dbi);
-    }
-
-    @Override
-    public Set<UUID> getNodeShards(String nodeIdentifier)
+    public Set<ShardMetadata> getNodeShards(String nodeIdentifier)
     {
         return dao.getNodeShards(nodeIdentifier);
+    }
+
+    @Override
+    public ResultIterator<ShardNodes> getShardNodes(long tableId, TupleDomain<RaptorColumnHandle> effectivePredicate)
+    {
+        return new ShardIterator(tableId, effectivePredicate, dbi);
     }
 
     @Override
@@ -291,29 +279,60 @@ public class DatabaseShardManager
     {
         int nodeId = getOrCreateNodeId(nodeIdentifier);
 
-        // assigning a shard is idempotent
-        dbi.inTransaction((handle, status) -> runIgnoringConstraintViolation(() -> {
+        runTransaction(dbi, (handle, status) -> {
             ShardManagerDao dao = handle.attach(ShardManagerDao.class);
-            dao.insertShardNode(shardUuid, nodeId);
 
-            Set<Integer> nodeIds = ImmutableSet.<Integer>builder()
-                    .addAll(fetchLockedNodeIds(handle, tableId, shardUuid))
-                    .add(nodeId)
-                    .build();
-            updateNodeIds(handle, tableId, shardUuid, nodeIds);
+            Set<Integer> nodes = new HashSet<>(fetchLockedNodeIds(handle, tableId, shardUuid));
+            if (nodes.add(nodeId)) {
+                updateNodeIds(handle, tableId, shardUuid, nodes);
+                dao.insertShardNode(shardUuid, nodeId);
+            }
 
             return null;
-        }));
+        });
     }
 
-    private <T> T runTransaction(TransactionCallback<T> callback)
+    @Override
+    public void unassignShard(long tableId, UUID shardUuid, String nodeIdentifier)
     {
-        try {
-            return dbi.inTransaction(callback);
+        int nodeId = getOrCreateNodeId(nodeIdentifier);
+
+        runTransaction(dbi, (handle, status) -> {
+            ShardManagerDao dao = handle.attach(ShardManagerDao.class);
+
+            Set<Integer> nodes = new HashSet<>(fetchLockedNodeIds(handle, tableId, shardUuid));
+            if (nodes.remove(nodeId)) {
+                updateNodeIds(handle, tableId, shardUuid, nodes);
+                dao.deleteShardNode(shardUuid, nodeId);
+            }
+
+            return null;
+        });
+    }
+
+    @Override
+    public Map<String, Long> getNodeBytes()
+    {
+        String sql = "" +
+                "SELECT n.node_identifier, x.size\n" +
+                "FROM (\n" +
+                "  SELECT node_id, sum(compressed_size) size\n" +
+                "  FROM shards s\n" +
+                "  JOIN shard_nodes sn ON (s.shard_id = sn.shard_id)\n" +
+                "  GROUP BY node_id\n" +
+                ") x\n" +
+                "JOIN nodes n ON (x.node_id = n.node_id)";
+
+        try (Handle handle = dbi.open()) {
+            return handle.createQuery(sql)
+                    .fold(ImmutableMap.<String, Long>builder(), (map, rs, ctx) -> {
+                        map.put(rs.getString("node_identifier"), rs.getLong("size"));
+                        return map;
+                    })
+                    .build();
         }
         catch (DBIException e) {
-            propagateIfInstanceOf(e.getCause(), PrestoException.class);
-            throw new PrestoException(RAPTOR_ERROR, "Failed to perform metadata operation", e);
+            throw metadataError(e);
         }
     }
 

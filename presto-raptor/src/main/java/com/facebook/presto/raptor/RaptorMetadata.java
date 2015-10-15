@@ -31,6 +31,7 @@ import com.facebook.presto.spi.ConnectorOutputTableHandle;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorTableHandle;
 import com.facebook.presto.spi.ConnectorTableMetadata;
+import com.facebook.presto.spi.ConnectorViewDefinition;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.SchemaTablePrefix;
@@ -48,11 +49,11 @@ import io.airlift.slice.Slice;
 import org.skife.jdbi.v2.Handle;
 import org.skife.jdbi.v2.IDBI;
 import org.skife.jdbi.v2.exceptions.DBIException;
-import org.skife.jdbi.v2.exceptions.UnableToExecuteStatementException;
 
 import javax.annotation.Nullable;
 import javax.inject.Inject;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -61,13 +62,17 @@ import java.util.UUID;
 import java.util.function.Predicate;
 
 import static com.facebook.presto.raptor.RaptorColumnHandle.SAMPLE_WEIGHT_COLUMN_NAME;
+import static com.facebook.presto.raptor.RaptorColumnHandle.SHARD_UUID_COLUMN_NAME;
 import static com.facebook.presto.raptor.RaptorColumnHandle.shardRowIdHandle;
+import static com.facebook.presto.raptor.RaptorColumnHandle.shardUuidColumnHandle;
 import static com.facebook.presto.raptor.RaptorErrorCode.RAPTOR_ERROR;
 import static com.facebook.presto.raptor.RaptorSessionProperties.getExternalBatchId;
 import static com.facebook.presto.raptor.RaptorTableProperties.getSortColumns;
 import static com.facebook.presto.raptor.RaptorTableProperties.getTemporalColumn;
 import static com.facebook.presto.raptor.metadata.DatabaseShardManager.shardIndexTable;
 import static com.facebook.presto.raptor.metadata.MetadataDaoUtils.createMetadataTablesWithRetry;
+import static com.facebook.presto.raptor.util.DatabaseUtil.onDemandDao;
+import static com.facebook.presto.raptor.util.DatabaseUtil.runTransaction;
 import static com.facebook.presto.raptor.util.Types.checkType;
 import static com.facebook.presto.spi.StandardErrorCode.ALREADY_EXISTS;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_FOUND;
@@ -76,10 +81,12 @@ import static com.facebook.presto.spi.block.SortOrder.ASC_NULLS_FIRST;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.DateType.DATE;
 import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
+import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static java.lang.String.format;
 import static java.util.Collections.nCopies;
+import static java.util.Objects.requireNonNull;
+import static java.util.stream.Collectors.toCollection;
 import static java.util.stream.Collectors.toList;
 
 public class RaptorMetadata
@@ -102,16 +109,16 @@ public class RaptorMetadata
             JsonCodec<ShardInfo> shardInfoCodec,
             JsonCodec<ShardDelta> shardDeltaCodec)
     {
-        checkNotNull(connectorId, "connectorId is null");
+        requireNonNull(connectorId, "connectorId is null");
 
         this.connectorId = connectorId.toString();
-        this.dbi = checkNotNull(dbi, "dbi is null");
-        this.dao = dbi.onDemand(MetadataDao.class);
-        this.shardManager = checkNotNull(shardManager, "shardManager is null");
-        this.shardInfoCodec = checkNotNull(shardInfoCodec, "shardInfoCodec is null");
-        this.shardDeltaCodec = checkNotNull(shardDeltaCodec, "shardDeltaCodec is null");
+        this.dbi = requireNonNull(dbi, "dbi is null");
+        this.dao = onDemandDao(dbi, MetadataDao.class);
+        this.shardManager = requireNonNull(shardManager, "shardManager is null");
+        this.shardInfoCodec = requireNonNull(shardInfoCodec, "shardInfoCodec is null");
+        this.shardDeltaCodec = requireNonNull(shardDeltaCodec, "shardDeltaCodec is null");
 
-        createMetadataTablesWithRetry(dao);
+        createMetadataTablesWithRetry(dbi);
     }
 
     @Override
@@ -128,7 +135,7 @@ public class RaptorMetadata
 
     private ConnectorTableHandle getTableHandle(SchemaTableName tableName)
     {
-        checkNotNull(tableName, "tableName is null");
+        requireNonNull(tableName, "tableName is null");
         Table table = dao.getTableInformation(tableName.getSchemaName(), tableName.getTableName());
         if (table == null) {
             return null;
@@ -163,10 +170,12 @@ public class RaptorMetadata
         List<ColumnMetadata> columns = dao.getTableColumns(handle.getTableId()).stream()
                 .map(TableColumn::toColumnMetadata)
                 .filter(isSampleWeightColumn().negate())
-                .collect(toList());
+                .collect(toCollection(ArrayList::new));
         if (columns.isEmpty()) {
             throw new PrestoException(RAPTOR_ERROR, "Table does not have any columns: " + tableName);
         }
+
+        columns.add(hiddenColumn(SHARD_UUID_COLUMN_NAME, VARCHAR));
         return new ConnectorTableMetadata(tableName, columns);
     }
 
@@ -187,6 +196,8 @@ public class RaptorMetadata
             }
             builder.put(tableColumn.getColumnName(), getRaptorColumnHandle(tableColumn));
         }
+        RaptorColumnHandle uuidColumn = shardUuidColumnHandle(connectorId);
+        builder.put(uuidColumn.getColumnName(), uuidColumn);
         return builder.build();
     }
 
@@ -208,8 +219,8 @@ public class RaptorMetadata
         long tableId = checkType(tableHandle, RaptorTableHandle.class, "tableHandle").getTableId();
         RaptorColumnHandle column = checkType(columnHandle, RaptorColumnHandle.class, "columnHandle");
 
-        if (column.isShardRowId()) {
-            return new ColumnMetadata(column.getColumnName(), column.getColumnType(), false, null, true);
+        if (column.isShardRowId() || column.isShardUuid()) {
+            return hiddenColumn(column.getColumnName(), column.getColumnType());
         }
 
         long columnId = column.getColumnId();
@@ -223,7 +234,7 @@ public class RaptorMetadata
     @Override
     public Map<SchemaTableName, List<ColumnMetadata>> listTableColumns(ConnectorSession session, SchemaTablePrefix prefix)
     {
-        checkNotNull(prefix, "prefix is null");
+        requireNonNull(prefix, "prefix is null");
 
         ImmutableListMultimap.Builder<SchemaTableName, ColumnMetadata> columns = ImmutableListMultimap.builder();
         for (TableColumn tableColumn : dao.listTableColumns(prefix.getSchemaName(), prefix.getTableName())) {
@@ -247,7 +258,7 @@ public class RaptorMetadata
     {
         RaptorTableHandle raptorHandle = checkType(tableHandle, RaptorTableHandle.class, "tableHandle");
         long tableId = raptorHandle.getTableId();
-        dbi.inTransaction((handle, status) -> {
+        runTransaction(dbi, (handle, status) -> {
             ShardManagerDao shardManagerDao = handle.attach(ShardManagerDao.class);
             shardManagerDao.dropShardNodes(tableId);
             shardManagerDao.dropShards(tableId);
@@ -272,7 +283,7 @@ public class RaptorMetadata
     public void renameTable(ConnectorSession session, ConnectorTableHandle tableHandle, SchemaTableName newTableName)
     {
         RaptorTableHandle table = checkType(tableHandle, RaptorTableHandle.class, "tableHandle");
-        dbi.inTransaction((handle, status) -> {
+        runTransaction(dbi, (handle, status) -> {
             MetadataDao dao = handle.attach(MetadataDao.class);
             dao.renameTable(table.getTableId(), newTableName.getSchemaName(), newTableName.getTableName());
             return null;
@@ -364,9 +375,9 @@ public class RaptorMetadata
             }
         }
 
-        long newTableId = dbi.inTransaction((dbiHandle, status) -> {
+        long newTableId = runTransaction(dbi, (dbiHandle, status) -> {
             MetadataDao dao = dbiHandle.attach(MetadataDao.class);
-            long tableId = dao.insertTable(table.getSchemaName(), table.getTableName());
+            long tableId = dao.insertTable(table.getSchemaName(), table.getTableName(), true);
             List<RaptorColumnHandle> sortColumnHandles = table.getSortColumnHandles();
 
             for (int i = 0; i < table.getColumnTypes().size(); i++) {
@@ -476,7 +487,7 @@ public class RaptorMetadata
         String tableName = viewName.getTableName();
 
         if (replace) {
-            dbi.inTransaction((handle, status) -> {
+            runTransaction(dbi, (handle, status) -> {
                 MetadataDao dao = handle.attach(MetadataDao.class);
                 dao.dropView(schemaName, tableName);
                 dao.insertView(schemaName, tableName, viewData);
@@ -488,7 +499,7 @@ public class RaptorMetadata
         try {
             dao.insertView(schemaName, tableName, viewData);
         }
-        catch (UnableToExecuteStatementException e) {
+        catch (PrestoException e) {
             if (viewExists(session, viewName)) {
                 throw new PrestoException(ALREADY_EXISTS, "View already exists: " + viewName);
             }
@@ -512,11 +523,11 @@ public class RaptorMetadata
     }
 
     @Override
-    public Map<SchemaTableName, String> getViews(ConnectorSession session, SchemaTablePrefix prefix)
+    public Map<SchemaTableName, ConnectorViewDefinition> getViews(ConnectorSession session, SchemaTablePrefix prefix)
     {
-        ImmutableMap.Builder<SchemaTableName, String> map = ImmutableMap.builder();
+        ImmutableMap.Builder<SchemaTableName, ConnectorViewDefinition> map = ImmutableMap.builder();
         for (ViewResult view : dao.getViews(prefix.getSchemaName(), prefix.getTableName())) {
-            map.put(view.getName(), view.getData());
+            map.put(view.getName(), new ConnectorViewDefinition(view.getName(), Optional.empty(), view.getData()));
         }
         return map.build();
     }
@@ -541,5 +552,10 @@ public class RaptorMetadata
     private static Predicate<ColumnMetadata> isSampleWeightColumn()
     {
         return input -> input.getName().equals(SAMPLE_WEIGHT_COLUMN_NAME);
+    }
+
+    private static ColumnMetadata hiddenColumn(String name, Type type)
+    {
+        return new ColumnMetadata(name, type, false, null, true);
     }
 }
