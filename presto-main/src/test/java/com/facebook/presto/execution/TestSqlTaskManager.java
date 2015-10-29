@@ -16,6 +16,7 @@ package com.facebook.presto.execution;
 import com.facebook.presto.ScheduledSplit;
 import com.facebook.presto.TaskSource;
 import com.facebook.presto.UnpartitionedPagePartitionFunction;
+import com.facebook.presto.block.BlockEncodingManager;
 import com.facebook.presto.client.NodeVersion;
 import com.facebook.presto.event.query.QueryMonitor;
 import com.facebook.presto.memory.LocalMemoryManager;
@@ -24,6 +25,7 @@ import com.facebook.presto.memory.ReservedSystemMemoryConfig;
 import com.facebook.presto.operator.ExchangeClient;
 import com.facebook.presto.operator.ExchangeClientSupplier;
 import com.facebook.presto.spi.Node;
+import com.facebook.presto.type.TypeRegistry;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.event.client.NullEventClient;
@@ -257,7 +259,8 @@ public class TestSqlTaskManager
                 new NodeInfo("test"),
                 localMemoryManager,
                 config,
-                new MemoryManagerConfig());
+                new MemoryManagerConfig(),
+                new BlockEncodingManager(new TypeRegistry()));
     }
 
     public static class MockExchangeClientSupplier

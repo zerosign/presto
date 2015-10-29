@@ -15,6 +15,7 @@ package com.facebook.presto.execution;
 
 import com.facebook.presto.OutputBuffers;
 import com.facebook.presto.Session;
+import com.facebook.presto.block.BlockEncodingManager;
 import com.facebook.presto.execution.NodeTaskMap.SplitCountChangeListener;
 import com.facebook.presto.memory.MemoryPool;
 import com.facebook.presto.memory.MemoryPoolId;
@@ -33,6 +34,7 @@ import com.facebook.presto.sql.planner.plan.PlanFragmentId;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
+import com.facebook.presto.type.TypeRegistry;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -152,11 +154,12 @@ public class MockRemoteTaskFactory
 
             MemoryPool memoryPool = new MemoryPool(new MemoryPoolId("test"), new DataSize(1, GIGABYTE));
             MemoryPool memorySystemPool = new MemoryPool(new MemoryPoolId("testSystem"), new DataSize(1, GIGABYTE));
+            BlockEncodingManager blockEncodingManager = new BlockEncodingManager(new TypeRegistry());
             this.taskContext = new QueryContext(taskId.getQueryId(), new DataSize(1, MEGABYTE), memoryPool, memorySystemPool, executor).addTaskContext(taskStateMachine, TEST_SESSION, new DataSize(1, MEGABYTE), true, true);
 
             this.location = URI.create("fake://task/" + taskId);
 
-            this.sharedBuffer = new SharedBuffer(taskId, executor, requireNonNull(new DataSize(1, DataSize.Unit.BYTE), "maxBufferSize is null"));
+            this.sharedBuffer = new SharedBuffer(taskId, executor, requireNonNull(new DataSize(1, DataSize.Unit.BYTE), "maxBufferSize is null"), blockEncodingManager);
             this.fragment = requireNonNull(fragment, "fragment is null");
             this.nodeId = requireNonNull(nodeId, "nodeId is null");
             splits.putAll(initialSplits);

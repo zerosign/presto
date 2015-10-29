@@ -17,6 +17,7 @@ import com.facebook.presto.OutputBuffers;
 import com.facebook.presto.PagePartitionFunction;
 import com.facebook.presto.execution.StateMachine.StateChangeListener;
 import com.facebook.presto.spi.Page;
+import com.facebook.presto.spi.block.BlockEncodingSerde;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Sets;
 import com.google.common.collect.Sets.SetView;
@@ -149,12 +150,14 @@ public class SharedBuffer
 
     private final SharedBufferMemoryManager memoryManager;
 
-    public SharedBuffer(TaskId taskId, Executor executor, DataSize maxBufferSize)
+    private final BlockEncodingSerde blockEncodingSerde;
+
+    public SharedBuffer(TaskId taskId, Executor executor, DataSize maxBufferSize, BlockEncodingSerde blockEncodingSerde)
     {
-        this(taskId, executor, maxBufferSize, deltaMemory -> { });
+        this(taskId, executor, maxBufferSize, deltaMemory -> { }, blockEncodingSerde);
     }
 
-    public SharedBuffer(TaskId taskId, Executor executor, DataSize maxBufferSize, SystemMemoryUsageListener systemMemoryUsageListener)
+    public SharedBuffer(TaskId taskId, Executor executor, DataSize maxBufferSize, SystemMemoryUsageListener systemMemoryUsageListener, BlockEncodingSerde blockEncodingSerde)
     {
         requireNonNull(taskId, "taskId is null");
         requireNonNull(executor, "executor is null");
@@ -164,6 +167,7 @@ public class SharedBuffer
         checkArgument(maxBufferSize.toBytes() > 0, "maxBufferSize must be at least 1");
         requireNonNull(systemMemoryUsageListener, "systemMemoryUsageListener is null");
         this.memoryManager = new SharedBufferMemoryManager(maxBufferSize.toBytes(), systemMemoryUsageListener);
+        this.blockEncodingSerde = requireNonNull(blockEncodingSerde, "blockEncodingSerde is null");
     }
 
     public void addStateChangeListener(StateChangeListener<BufferState> stateChangeListener)
@@ -251,7 +255,7 @@ public class SharedBuffer
     private PartitionBuffer createOrGetPartitionBuffer(int partition)
     {
         checkHoldsLock();
-        return partitionBuffers.computeIfAbsent(partition, k -> new PartitionBuffer(partition, memoryManager));
+        return partitionBuffers.computeIfAbsent(partition, k -> new PartitionBuffer(partition, memoryManager, blockEncodingSerde));
     }
 
     public synchronized ListenableFuture<?> enqueue(Page page)

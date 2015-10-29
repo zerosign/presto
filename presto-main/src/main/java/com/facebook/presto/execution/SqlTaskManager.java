@@ -22,6 +22,7 @@ import com.facebook.presto.memory.MemoryManagerConfig;
 import com.facebook.presto.memory.MemoryPoolAssignment;
 import com.facebook.presto.memory.MemoryPoolAssignmentsRequest;
 import com.facebook.presto.memory.QueryContext;
+import com.facebook.presto.spi.block.BlockEncodingSerde;
 import com.facebook.presto.sql.planner.LocalExecutionPlanner;
 import com.facebook.presto.sql.planner.PlanFragment;
 import com.google.common.base.Preconditions;
@@ -95,7 +96,8 @@ public class SqlTaskManager
             NodeInfo nodeInfo,
             LocalMemoryManager localMemoryManager,
             TaskManagerConfig config,
-            MemoryManagerConfig memoryManagerConfig)
+            MemoryManagerConfig memoryManagerConfig,
+            BlockEncodingSerde blockEncodingSerde)
     {
         requireNonNull(nodeInfo, "nodeInfo is null");
         requireNonNull(config, "config is null");
@@ -142,7 +144,8 @@ public class SqlTaskManager
                                 finishedTaskStats.merge(sqlTask.getIoStats());
                                 return null;
                         },
-                        maxBufferSize
+                        maxBufferSize,
+                        blockEncodingSerde
                 );
             }
         });

@@ -119,5 +119,11 @@ public class FixedWidthBlockEncoding
         {
             output.writeInt(blockEncoding.getFixedSize());
         }
+
+        @Override
+        public long getEncodingSize(BlockEncodingSerde serde, FixedWidthBlockEncoding blockEncoding)
+        {
+            return 4;
+        }
     }
 }

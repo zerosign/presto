@@ -62,6 +62,19 @@ public class Page
         return sizeInBytes;
     }
 
+    public long getSizeInBytesxx()
+    {
+        long sizeInBytes = this.sizeInBytes.get();
+        if (sizeInBytes < 0) {
+            sizeInBytes = 0;
+            for (Block block : blocks) {
+                sizeInBytes += block.getEncoding().getEstimatedSize(block);
+            }
+            this.sizeInBytes.set(sizeInBytes);
+        }
+        return sizeInBytes;
+    }
+
     public long getRetainedSizeInBytes()
     {
         long retainedSizeInBytes = this.retainedSizeInBytes.get();

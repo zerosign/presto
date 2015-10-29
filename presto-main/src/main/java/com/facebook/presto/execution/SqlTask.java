@@ -20,6 +20,7 @@ import com.facebook.presto.execution.StateMachine.StateChangeListener;
 import com.facebook.presto.memory.QueryContext;
 import com.facebook.presto.operator.TaskContext;
 import com.facebook.presto.operator.TaskStats;
+import com.facebook.presto.spi.block.BlockEncodingSerde;
 import com.facebook.presto.sql.planner.PlanFragment;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.base.Function;
@@ -72,7 +73,8 @@ public class SqlTask
             SqlTaskExecutionFactory sqlTaskExecutionFactory,
             ExecutorService taskNotificationExecutor,
             final Function<SqlTask, ?> onDone,
-            DataSize maxBufferSize)
+            DataSize maxBufferSize,
+            BlockEncodingSerde blockEncodingSerde)
     {
         this.taskId = requireNonNull(taskId, "taskId is null");
         this.nodeInstanceId = requireNonNull(nodeInstanceId, "nodeInstanceId is null");
@@ -83,7 +85,7 @@ public class SqlTask
         requireNonNull(onDone, "onDone is null");
         requireNonNull(maxBufferSize, "maxBufferSize is null");
 
-        sharedBuffer = new SharedBuffer(taskId, taskNotificationExecutor, maxBufferSize, new UpdateSystemMemory(queryContext));
+        sharedBuffer = new SharedBuffer(taskId, taskNotificationExecutor, maxBufferSize, new UpdateSystemMemory(queryContext), blockEncodingSerde);
         taskStateMachine = new TaskStateMachine(taskId, taskNotificationExecutor);
         taskStateMachine.addStateChangeListener(new StateChangeListener<TaskState>()
         {

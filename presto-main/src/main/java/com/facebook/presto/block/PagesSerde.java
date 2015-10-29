@@ -54,6 +54,18 @@ public final class PagesSerde
         }
     }
 
+    public static long getEstimatedSize(BlockEncodingSerde blockEncodingSerde, Page page)
+    {
+        long size = 8; // position count + blocks length
+        for (Block block : page.getBlocks()) {
+            BlockEncoding encoding = block.getEncoding();
+            size += blockEncodingSerde.getEncodingSize(encoding);
+            size += encoding.getEstimatedSize(block);
+        }
+
+        return size;
+    }
+
     public static Iterator<Page> readPages(BlockEncodingSerde blockEncodingSerde, SliceInput sliceInput)
     {
         return new PagesReader(blockEncodingSerde, sliceInput);

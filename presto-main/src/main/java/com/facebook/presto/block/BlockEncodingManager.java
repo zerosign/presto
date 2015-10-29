@@ -99,6 +99,12 @@ public final class BlockEncodingManager
         writeBlockEncodingInternal(output, encoding);
     }
 
+    @Override
+    public long getEncodingSize(BlockEncoding encoding)
+    {
+        return getEncodingSizeInternal(encoding);
+    }
+
     /**
      * This method enables internal implementations to serialize data without holding a BlockEncodingManager.
      * For example, LiteralInterpreter.toExpression serializes data to produce literals.
@@ -106,6 +112,11 @@ public final class BlockEncodingManager
     public static void writeBlockEncodingInternal(SliceOutput output, BlockEncoding encoding)
     {
         WriteOnlyBlockEncodingManager.INSTANCE.writeBlockEncoding(output, encoding);
+    }
+
+    public static long getEncodingSizeInternal(BlockEncoding encoding)
+    {
+        return WriteOnlyBlockEncodingManager.INSTANCE.getEncodingSize(encoding);
     }
 
     private static class WriteOnlyBlockEncodingManager
@@ -137,6 +148,18 @@ public final class BlockEncodingManager
 
             // write the encoding to the output
             blockEncoding.writeEncoding(this, output, encoding);
+        }
+
+        @Override
+        public long getEncodingSize(BlockEncoding encoding)
+        {
+            String encodingName = encoding.getName();
+            BlockEncodingFactory<BlockEncoding> blockEncoding = encoding.getFactory();
+
+            long size = 4 + encodingName.getBytes(UTF_8).length;
+            size += blockEncoding.getEncodingSize(this, encoding);
+
+            return size;
         }
     }
 

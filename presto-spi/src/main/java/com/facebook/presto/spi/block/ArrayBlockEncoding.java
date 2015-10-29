@@ -53,8 +53,16 @@ public class ArrayBlockEncoding
     @Override
     public int getEstimatedSize(Block block)
     {
-        //TODO remove this method
-        throw new UnsupportedOperationException();
+        AbstractArrayBlock arrayBlock = (AbstractArrayBlock) block;
+        int positionCount = arrayBlock.getPositionCount();
+
+        int size = valueBlockEncoding.getEstimatedSize(arrayBlock.getValues());
+        size += 8; // offsetBase + positionCount
+        size += positionCount * 4;
+
+        size += positionCount / 8 + 1; // one byte null bits per eight elements and possibly last null bits
+
+        return size;
     }
 
     @Override
@@ -95,6 +103,12 @@ public class ArrayBlockEncoding
         public void writeEncoding(BlockEncodingSerde serde, SliceOutput output, ArrayBlockEncoding blockEncoding)
         {
             serde.writeBlockEncoding(output, blockEncoding.valueBlockEncoding);
+        }
+
+        @Override
+        public long getEncodingSize(BlockEncodingSerde serde, ArrayBlockEncoding blockEncoding)
+        {
+            return serde.getEncodingSize(blockEncoding.valueBlockEncoding);
         }
     }
 }

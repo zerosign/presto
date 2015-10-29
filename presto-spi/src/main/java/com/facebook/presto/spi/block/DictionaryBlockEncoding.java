@@ -80,8 +80,14 @@ public class DictionaryBlockEncoding
     @Override
     public int getEstimatedSize(Block block)
     {
-        //TODO remove this method
-        throw new UnsupportedOperationException();
+        DictionaryBlock dictionaryBlock = (DictionaryBlock) block;
+
+        dictionaryBlock = dictionaryBlock.compact();
+        int size = 4; // positionCount
+        size += dictionaryEncoding.getEstimatedSize(dictionaryBlock.getDictionary());
+        size += 4 * dictionaryBlock.getIds().length();
+
+        return size;
     }
 
     @Override
@@ -115,6 +121,12 @@ public class DictionaryBlockEncoding
         public void writeEncoding(BlockEncodingSerde serde, SliceOutput output, DictionaryBlockEncoding blockEncoding)
         {
             serde.writeBlockEncoding(output, blockEncoding.getDictionaryEncoding());
+        }
+
+        @Override
+        public long getEncodingSize(BlockEncodingSerde serde, DictionaryBlockEncoding blockEncoding)
+        {
+            return serde.getEncodingSize(blockEncoding.getDictionaryEncoding());
         }
     }
 }

@@ -13,7 +13,9 @@
  */
 package com.facebook.presto.execution;
 
+import com.facebook.presto.block.PagesSerde;
 import com.facebook.presto.spi.Page;
+import com.facebook.presto.spi.block.BlockEncodingSerde;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -48,12 +50,14 @@ public class PartitionBuffer
     private final AtomicLong bufferedBytes = new AtomicLong();  // Bytes in the master buffer
     private final int partition;
     private final SharedBufferMemoryManager memoryManager;
+    private final BlockEncodingSerde blockEncodingSerde;
 
-    public PartitionBuffer(int partition, SharedBufferMemoryManager memoryManager)
+    public PartitionBuffer(int partition, SharedBufferMemoryManager memoryManager, BlockEncodingSerde blockEncodingSerde)
     {
         checkArgument(partition >= 0, "partition must be >= 0");
         this.partition = partition;
         this.memoryManager = requireNonNull(memoryManager, "memoryManager is null");
+        this.blockEncodingSerde = requireNonNull(blockEncodingSerde, "blockEncodingSerde is null");
     }
 
     public synchronized ListenableFuture<?> enqueuePage(Page page)
@@ -93,7 +97,7 @@ public class PartitionBuffer
         int listOffset = Ints.checkedCast(sequenceId - masterSequenceId.get());
         while (listOffset < masterBuffer.size()) {
             Page page = masterBuffer.get(listOffset++);
-            bytes += page.getSizeInBytes();
+            bytes += PagesSerde.getEstimatedSize(blockEncodingSerde, page);
             // break (and don't add) if this page would exceed the limit
             if (!pages.isEmpty() && bytes > maxBytes) {
                 break;

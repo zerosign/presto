@@ -86,5 +86,11 @@ public class LazyBlockEncoding
         {
             delegate.writeEncoding(serde, output, blockEncoding.delegate);
         }
+
+        @Override
+        public long getEncodingSize(BlockEncodingSerde serde, LazyBlockEncoding blockEncoding)
+        {
+            return delegate.getEncodingSize(serde, blockEncoding.delegate);
+        }
     }
 }

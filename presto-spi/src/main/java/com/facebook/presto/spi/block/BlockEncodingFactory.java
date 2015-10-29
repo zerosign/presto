@@ -33,4 +33,12 @@ public interface BlockEncodingFactory<T extends BlockEncoding>
      * Writes this encoding to the output stream.
      */
     void writeEncoding(BlockEncodingSerde serde, SliceOutput output, T blockEncoding);
+
+    /**
+     * Get size of blockEncoding
+     */
+    default long getEncodingSize(BlockEncodingSerde serde, T blockEncoding)
+    {
+        return 0L;
+    }
 }

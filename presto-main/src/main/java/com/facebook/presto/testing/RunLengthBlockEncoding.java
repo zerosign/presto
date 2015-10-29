@@ -106,5 +106,11 @@ public class RunLengthBlockEncoding
         {
             serde.writeBlockEncoding(output, blockEncoding.getValueBlockEncoding());
         }
+
+        @Override
+        public long getEncodingSize(BlockEncodingSerde serde, RunLengthBlockEncoding blockEncoding)
+        {
+            return serde.getEncodingSize(blockEncoding.getValueBlockEncoding());
+        }
     }
 }

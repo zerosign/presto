@@ -53,8 +53,14 @@ public class InterleavedBlockEncoding
     @Override
     public int getEstimatedSize(Block block)
     {
-        //TODO remove this method
-        throw new UnsupportedOperationException();
+        AbstractInterleavedBlock interleavedBlock = (AbstractInterleavedBlock) block;
+
+        int size = 0;
+        for (int i = 0; i < individualBlockEncodings.length; i++) {
+            size += individualBlockEncodings[i].getEstimatedSize(interleavedBlock.getBlock(i));
+        }
+
+        return size;
     }
 
     @Override
@@ -100,6 +106,17 @@ public class InterleavedBlockEncoding
             for (BlockEncoding individualBlockEncoding : blockEncoding.individualBlockEncodings) {
                 serde.writeBlockEncoding(output, individualBlockEncoding);
             }
+        }
+
+        @Override
+        public long getEncodingSize(BlockEncodingSerde serde, InterleavedBlockEncoding blockEncoding)
+        {
+            long size = 4;
+            for (BlockEncoding individualBlockEncoding : blockEncoding.individualBlockEncodings) {
+                serde.getEncodingSize(individualBlockEncoding);
+            }
+
+            return size;
         }
     }
 }

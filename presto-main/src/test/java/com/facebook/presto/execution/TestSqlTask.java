@@ -17,13 +17,16 @@ import com.facebook.presto.OutputBuffers;
 import com.facebook.presto.ScheduledSplit;
 import com.facebook.presto.TaskSource;
 import com.facebook.presto.UnpartitionedPagePartitionFunction;
+import com.facebook.presto.block.BlockEncodingManager;
 import com.facebook.presto.client.NodeVersion;
 import com.facebook.presto.event.query.QueryMonitor;
 import com.facebook.presto.execution.SharedBuffer.BufferState;
 import com.facebook.presto.memory.MemoryPool;
 import com.facebook.presto.memory.MemoryPoolId;
 import com.facebook.presto.memory.QueryContext;
+import com.facebook.presto.spi.block.BlockEncodingSerde;
 import com.facebook.presto.sql.planner.LocalExecutionPlanner;
+import com.facebook.presto.type.TypeRegistry;
 import com.google.common.base.Functions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -67,6 +70,7 @@ public class TestSqlTask
     private final TaskExecutor taskExecutor;
     private final ScheduledExecutorService taskNotificationExecutor;
     private final SqlTaskExecutionFactory sqlTaskExecutionFactory;
+    private final BlockEncodingSerde blockEncodingSerde;
 
     private final AtomicLong nextTaskId = new AtomicLong();
 
@@ -85,6 +89,8 @@ public class TestSqlTask
                 planner,
                 new QueryMonitor(new ObjectMapperProvider().get(), new NullEventClient(), new NodeInfo("test"), new NodeVersion("testVersion")),
                 new TaskManagerConfig());
+
+        blockEncodingSerde = new BlockEncodingManager(new TypeRegistry());
     }
 
     @AfterClass
@@ -296,6 +302,7 @@ public class TestSqlTask
                 sqlTaskExecutionFactory,
                 taskNotificationExecutor,
                 Functions.<SqlTask>identity(),
-                new DataSize(32, MEGABYTE));
+                new DataSize(32, MEGABYTE),
+                blockEncodingSerde);
     }
 }
