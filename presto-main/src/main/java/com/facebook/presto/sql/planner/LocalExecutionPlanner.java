@@ -687,10 +687,28 @@ public class LocalExecutionPlanner
                 return planGlobalAggregation(context.getNextOperatorId(), node, source);
             }
 
+            if (node.getStep() == Step.INTERMEDIATE) {
+                LocalExecutionPlanContext intermediateContext = context.createSubContext();
+                intermediateContext.setInputDriver(context.isInputDriver());
+
+                PhysicalOperation source = node.getSource().accept(this, intermediateContext);
+                InMemoryExchange exchange = new InMemoryExchange(source.getTypes());
+                List<OperatorFactory> factories = ImmutableList.<OperatorFactory>builder()
+                        .addAll(source.getOperatorFactories())
+                        .add(exchange.createSinkFactory(intermediateContext.getNextOperatorId()))
+                        .build();
+                exchange.noMoreSinkFactories();
+                context.addDriverFactory(new DriverFactory(intermediateContext.isInputDriver(), false, factories));
+
+                OperatorFactory exchangeSource = createRandomDistribution(context.getNextOperatorId(), exchange);
+                source = new PhysicalOperation(exchangeSource, source.getLayout());
+                return planGroupByAggregation(node, source, context.getNextOperatorId(), Optional.empty());
+            }
+
             int aggregationConcurrency = getTaskAggregationConcurrency(session);
             if (node.getStep() == Step.PARTIAL || !context.isAllowLocalParallel() || context.getDriverInstanceCount() > 1 || aggregationConcurrency <= 1) {
                 PhysicalOperation source = node.getSource().accept(this, context);
-                return planGroupByAggregation(node, source, context, Optional.empty());
+                return planGroupByAggregation(node, source, context.getNextOperatorId(), Optional.empty());
             }
 
             // create context for parallel operators
@@ -731,7 +749,7 @@ public class LocalExecutionPlanner
             source = new PhysicalOperation(hashPartitionMask, source.getLayout(), source);
 
             // plan aggregation
-            PhysicalOperation operation = planGroupByAggregation(node, source, parallelContext, Optional.of(defaultMaskChannel));
+            PhysicalOperation operation = planGroupByAggregation(node, source, parallelContext.getNextOperatorId(), Optional.of(defaultMaskChannel));
 
             // merge parallel tasks back into a single stream
             operation = addInMemoryExchange(context, operation, parallelContext);
@@ -1694,7 +1712,7 @@ public class LocalExecutionPlanner
             return new PhysicalOperation(operatorFactory, outputMappings.build(), source);
         }
 
-        private PhysicalOperation planGroupByAggregation(AggregationNode node, PhysicalOperation source, LocalExecutionPlanContext context, Optional<Integer> defaultMaskChannel)
+        private PhysicalOperation planGroupByAggregation(AggregationNode node, PhysicalOperation source, int operatorId, Optional<Integer> defaultMaskChannel)
         {
             List<Symbol> groupBySymbols = node.getGroupBy();
 
@@ -1734,7 +1752,7 @@ public class LocalExecutionPlanner
             Optional<Integer> hashChannel = node.getHashSymbol().map(channelGetter(source));
 
             OperatorFactory operatorFactory = new HashAggregationOperatorFactory(
-                    context.getNextOperatorId(),
+                    operatorId,
                     groupByTypes,
                     groupByChannels,
                     node.getStep(),

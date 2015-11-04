@@ -28,11 +28,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import static com.facebook.presto.raptor.metadata.ShardManagerDaoUtils.createShardTablesWithRetry;
+import static com.facebook.presto.raptor.metadata.SchemaDaoUtil.createTablesWithRetry;
 import static io.airlift.testing.Assertions.assertInstanceOf;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
-import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
 
@@ -50,7 +49,7 @@ public class TestShardManagerDao
         dbi = new DBI("jdbc:h2:mem:test" + System.nanoTime());
         dummyHandle = dbi.open();
         dao = dbi.onDemand(ShardManagerDao.class);
-        createShardTablesWithRetry(dbi);
+        createTablesWithRetry(dbi);
     }
 
     @AfterMethod(alwaysRun = true)
@@ -81,20 +80,14 @@ public class TestShardManagerDao
     }
 
     @Test
-    public void testTableCreation()
-            throws Exception
-    {
-        assertEquals(dao.getAllNodesInUse(), ImmutableSet.of());
-    }
-
-    @Test
     public void testNodeInsert()
             throws Exception
     {
         assertEquals(dao.getAllNodesInUse(), ImmutableSet.of());
 
         String nodeName = UUID.randomUUID().toString();
-        dao.insertNode(nodeName);
+        int nodeId = dao.insertNode(nodeName);
+        assertEquals(dao.getNodeId(nodeName), (Integer) nodeId);
 
         assertEquals(dao.getAllNodesInUse(), ImmutableSet.of(nodeName));
     }
@@ -102,7 +95,8 @@ public class TestShardManagerDao
     @Test
     public void testInsertShard()
     {
-        long shardId = dao.insertShard(UUID.randomUUID(), 5, 13, 42, 84);
+        long tableId = createTable("test");
+        long shardId = dao.insertShard(UUID.randomUUID(), tableId, 13, 42, 84);
 
         String sql = "SELECT table_id, row_count, compressed_size, uncompressed_size " +
                 "FROM shards WHERE shard_id = ?";
@@ -111,7 +105,7 @@ public class TestShardManagerDao
         assertEquals(shards.size(), 1);
         Map<String, Object> shard = shards.get(0);
 
-        assertEquals(shard.get("table_id"), 5L);
+        assertEquals(shard.get("table_id"), tableId);
         assertEquals(shard.get("row_count"), 13L);
         assertEquals(shard.get("compressed_size"), 42L);
         assertEquals(shard.get("uncompressed_size"), 84L);
@@ -121,10 +115,9 @@ public class TestShardManagerDao
     public void testInsertShardNodeUsingShardUuid()
             throws Exception
     {
-        dao.insertNode("node");
-        int nodeId = dao.getNodeId("node");
+        int nodeId = dao.insertNode("node");
 
-        long tableId = 1;
+        long tableId = createTable("test");
         UUID shard = UUID.randomUUID();
         dao.insertShard(shard, tableId, 0, 0, 0);
 
@@ -140,14 +133,10 @@ public class TestShardManagerDao
         assertEquals(dao.getAllNodesInUse(), ImmutableSet.of());
 
         String nodeName1 = UUID.randomUUID().toString();
-        dao.insertNode(nodeName1);
-        Integer nodeId1 = dao.getNodeId(nodeName1);
-        assertNotNull(nodeId1);
+        int nodeId1 = dao.insertNode(nodeName1);
 
         String nodeName2 = UUID.randomUUID().toString();
-        dao.insertNode(nodeName2);
-        Integer nodeId2 = dao.getNodeId(nodeName2);
-        assertNotNull(nodeId2);
+        int nodeId2 = dao.insertNode(nodeName2);
 
         assertEquals(dao.getAllNodesInUse(), ImmutableSet.of(nodeName1, nodeName2));
 
@@ -156,7 +145,7 @@ public class TestShardManagerDao
         UUID shardUuid3 = UUID.randomUUID();
         UUID shardUuid4 = UUID.randomUUID();
 
-        long tableId = 1;
+        long tableId = createTable("test");
 
         long shardId1 = dao.insertShard(shardUuid1, tableId, 1, 11, 111);
         long shardId2 = dao.insertShard(shardUuid2, tableId, 2, 22, 222);
@@ -199,20 +188,16 @@ public class TestShardManagerDao
         assertEquals(dao.getAllNodesInUse(), ImmutableSet.of());
 
         String nodeName1 = UUID.randomUUID().toString();
-        dao.insertNode(nodeName1);
-        Integer nodeId1 = dao.getNodeId(nodeName1);
-        assertNotNull(nodeId1);
+        int nodeId1 = dao.insertNode(nodeName1);
 
         assertEquals(dao.getAllNodesInUse(), ImmutableSet.of(nodeName1));
 
         String nodeName2 = UUID.randomUUID().toString();
-        dao.insertNode(nodeName2);
-        Integer nodeId2 = dao.getNodeId(nodeName2);
-        assertNotNull(nodeId2);
+        int nodeId2 = dao.insertNode(nodeName2);
 
         assertEquals(dao.getAllNodesInUse(), ImmutableSet.of(nodeName1, nodeName2));
 
-        long tableId = 1;
+        long tableId = createTable("test");
 
         UUID shardUuid1 = UUID.randomUUID();
         UUID shardUuid2 = UUID.randomUUID();
@@ -252,6 +237,11 @@ public class TestShardManagerDao
         assertContainsShardNode(shardNodes, nodeName1, shardUuid3);
         assertContainsShardNode(shardNodes, nodeName1, shardUuid4);
         assertContainsShardNode(shardNodes, nodeName2, shardUuid4);
+    }
+
+    private long createTable(String name)
+    {
+        return dbi.onDemand(MetadataDao.class).insertTable("test", name, false);
     }
 
     private static void assertContainsShardNode(List<ShardNode> nodes, String nodeName, UUID shardUuid)

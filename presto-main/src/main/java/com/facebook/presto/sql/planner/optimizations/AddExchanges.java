@@ -118,22 +118,21 @@ public class AddExchanges
 {
     private final SqlParser parser;
     private final Metadata metadata;
-    private final boolean distributedIndexJoins;
 
-    public AddExchanges(Metadata metadata, SqlParser parser, boolean distributedIndexJoins)
+    public AddExchanges(Metadata metadata, SqlParser parser)
     {
         this.metadata = metadata;
         this.parser = parser;
-        this.distributedIndexJoins = distributedIndexJoins;
     }
 
     @Override
     public PlanNode optimize(PlanNode plan, Session session, Map<Symbol, Type> types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator)
     {
         boolean distributedJoinEnabled = SystemSessionProperties.isDistributedJoinEnabled(session);
+        boolean distributedIndexJoinEnabled = SystemSessionProperties.isDistributedIndexJoinEnabled(session);
         boolean redistributeWrites = SystemSessionProperties.isRedistributeWrites(session);
         boolean preferStreamingOperators = SystemSessionProperties.preferStreamingOperators(session);
-        PlanWithProperties result = plan.accept(new Rewriter(symbolAllocator, idAllocator, symbolAllocator, session, distributedIndexJoins, distributedJoinEnabled, preferStreamingOperators, redistributeWrites), new Context(PreferredProperties.any(), false));
+        PlanWithProperties result = plan.accept(new Rewriter(symbolAllocator, idAllocator, symbolAllocator, session, distributedIndexJoinEnabled, distributedJoinEnabled, preferStreamingOperators, redistributeWrites), new Context(PreferredProperties.any(), false));
         return result.getNode();
     }
 
@@ -545,10 +544,6 @@ public class AddExchanges
             PlanWithProperties child = planChild(node, context.withPreferredProperties(PreferredProperties.any()));
 
             if (child.getProperties().isDistributed()) {
-                child = withDerivedProperties(
-                        new DistinctLimitNode(idAllocator.getNextId(), child.getNode(), node.getLimit(), node.getHashSymbol()),
-                        child.getProperties());
-
                 child = withDerivedProperties(
                         gatheringExchange(
                                 idAllocator.getNextId(),
