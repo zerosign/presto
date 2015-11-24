@@ -54,9 +54,9 @@ task "update-pom" do
   pom = REXML::Document.new(File.read("pom.xml"))
   presto_version = REXML::XPath.first(pom, "/project/version")
 
-  # Set (presto-version)-(git revision number:first 10 characters) version to pom.xml files
-  version = "#{presto_version.text.gsub("-SNAPSHOT", "")}-#{rev[0...10]}"
-  sh "mvn versions:set -DgenerateBackupPoms=false -DnewVersion=#{version}"
+  # Set (presto-version)-(git revision number:first 7 characters) version to pom.xml files
+  version = "#{presto_version.text.gsub("-SNAPSHOT", "")}-#{rev[0...7]}"
+  sh "mvn versions:set -DgenerateBackupPoms=false -DnewVersion=#{version} -N"
 
   # Reload pom.xml
   pom = REXML::Document.new(File.read("pom.xml"))
