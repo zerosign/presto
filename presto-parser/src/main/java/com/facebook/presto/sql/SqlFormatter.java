@@ -70,6 +70,7 @@ import java.util.Iterator;
 import java.util.List;
 
 import static com.facebook.presto.sql.ExpressionFormatter.formatExpression;
+import static com.facebook.presto.sql.ExpressionFormatter.formatGroupBy;
 import static com.facebook.presto.sql.ExpressionFormatter.formatSortItems;
 import static com.facebook.presto.sql.ExpressionFormatter.formatStringLiteral;
 import static com.google.common.base.Preconditions.checkArgument;
@@ -194,8 +195,7 @@ public final class SqlFormatter
             }
 
             if (!node.getGroupBy().isEmpty()) {
-                append(indent, "GROUP BY " + Joiner.on(", ").join(transform(node.getGroupBy(), ExpressionFormatter::formatExpression)))
-                        .append('\n');
+                append(indent, "GROUP BY " + formatGroupBy(node.getGroupBy())).append('\n');
             }
 
             if (node.getHaving().isPresent()) {
@@ -704,6 +704,12 @@ public final class SqlFormatter
             builder.append("INSERT INTO ")
                     .append(node.getTarget())
                     .append(" ");
+
+            if (node.getColumns().isPresent()) {
+                builder.append("(")
+                        .append(Joiner.on(", ").join(node.getColumns().get()))
+                        .append(") ");
+            }
 
             process(node.getQuery(), indent);
 

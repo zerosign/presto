@@ -14,7 +14,7 @@
 package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.block.BlockUtils;
+import com.facebook.presto.SystemSessionProperties;
 import com.facebook.presto.execution.TaskManagerConfig;
 import com.facebook.presto.index.IndexManager;
 import com.facebook.presto.metadata.Metadata;
@@ -155,7 +155,7 @@ import static com.facebook.presto.SystemSessionProperties.getTaskAggregationConc
 import static com.facebook.presto.SystemSessionProperties.getTaskHashBuildConcurrency;
 import static com.facebook.presto.SystemSessionProperties.getTaskJoinConcurrency;
 import static com.facebook.presto.SystemSessionProperties.getTaskWriterCount;
-import static com.facebook.presto.metadata.FunctionType.SCALAR;
+import static com.facebook.presto.metadata.FunctionKind.SCALAR;
 import static com.facebook.presto.operator.DistinctLimitOperator.DistinctLimitOperatorFactory;
 import static com.facebook.presto.operator.InMemoryExchangeSourceOperator.InMemoryExchangeSourceOperatorFactory.createBroadcastDistribution;
 import static com.facebook.presto.operator.InMemoryExchangeSourceOperator.InMemoryExchangeSourceOperatorFactory.createRandomDistribution;
@@ -168,6 +168,7 @@ import static com.facebook.presto.operator.UnnestOperator.UnnestOperatorFactory;
 import static com.facebook.presto.operator.WindowFunctionDefinition.window;
 import static com.facebook.presto.spi.StandardErrorCode.COMPILER_ERROR;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
+import static com.facebook.presto.spi.type.TypeUtils.writeNativeValue;
 import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.getExpressionTypes;
 import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.getExpressionTypesFromInput;
 import static com.facebook.presto.sql.planner.plan.JoinNode.Type.FULL;
@@ -224,7 +225,7 @@ public class LocalExecutionPlanner
         this.pageSinkManager = requireNonNull(pageSinkManager, "pageSinkManager is null");
         this.compiler = requireNonNull(compiler, "compiler is null");
         this.indexJoinLookupStats = requireNonNull(indexJoinLookupStats, "indexJoinLookupStats is null");
-        this.maxIndexMemorySize = requireNonNull(taskManagerConfig, "taskManagerConfig is null").getMaxTaskIndexMemoryUsage();
+        this.maxIndexMemorySize = requireNonNull(taskManagerConfig, "taskManagerConfig is null").getMaxIndexMemoryUsage();
         this.maxPartialAggregationMemorySize = taskManagerConfig.getMaxPartialAggregationMemoryUsage();
 
         interpreterEnabled = compilerConfig.isInterpreterEnabled();
@@ -1033,7 +1034,7 @@ public class LocalExecutionPlanner
                 for (int i = 0; i < row.size(); i++) {
                     // evaluate the literal value
                     Object result = ExpressionInterpreter.expressionInterpreter(row.get(i), metadata, context.getSession(), expressionTypes).evaluate(0);
-                    BlockUtils.appendObject(outputTypes.get(i), pageBuilder.getBlockBuilder(i), result);
+                    writeNativeValue(outputTypes.get(i), pageBuilder.getBlockBuilder(i), result);
                 }
             }
 
@@ -1240,7 +1241,8 @@ public class LocalExecutionPlanner
                     indexSource.getTypes(),
                     indexBuildDriverFactoryProvider,
                     maxIndexMemorySize,
-                    indexJoinLookupStats);
+                    indexJoinLookupStats,
+                    SystemSessionProperties.isShareIndexLoading(session));
 
             ImmutableMap.Builder<Symbol, Integer> outputMappings = ImmutableMap.builder();
             outputMappings.putAll(probeSource.getLayout());

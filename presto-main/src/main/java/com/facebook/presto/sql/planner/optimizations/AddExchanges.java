@@ -25,7 +25,8 @@ import com.facebook.presto.spi.Constraint;
 import com.facebook.presto.spi.GroupingProperty;
 import com.facebook.presto.spi.LocalProperty;
 import com.facebook.presto.spi.SortingProperty;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.predicate.NullableValue;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.DomainTranslator;
@@ -58,6 +59,7 @@ import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
 import com.facebook.presto.sql.planner.plan.TopNRowNumberNode;
 import com.facebook.presto.sql.planner.plan.UnionNode;
+import com.facebook.presto.sql.planner.plan.UnnestNode;
 import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
 import com.facebook.presto.sql.tree.BooleanLiteral;
@@ -602,9 +604,7 @@ public class AddExchanges
 
             Expression constraint = combineConjuncts(
                     deterministicPredicate,
-                    DomainTranslator.toPredicate(
-                            node.getCurrentConstraint().transform(assignments::get),
-                            symbolAllocator.getTypes()));
+                    DomainTranslator.toPredicate(node.getCurrentConstraint().transform(assignments::get)));
 
             // Layouts will be returned in order of the connector's preference
             List<TableLayoutResult> layouts = metadata.getLayouts(
@@ -640,9 +640,7 @@ public class AddExchanges
                         PlanWithProperties result = new PlanWithProperties(tableScan, deriveProperties(tableScan, ImmutableList.of()));
 
                         Expression resultingPredicate = combineConjuncts(
-                                DomainTranslator.toPredicate(
-                                        layout.getUnenforcedConstraint().transform(assignments::get),
-                                        symbolAllocator.getTypes()),
+                                DomainTranslator.toPredicate(layout.getUnenforcedConstraint().transform(assignments::get)),
                                 stripDeterministicConjuncts(predicate),
                                 decomposedPredicate.getRemainingExpression());
 
@@ -680,7 +678,7 @@ public class AddExchanges
             return possiblePlans.get(0);
         }
 
-        private boolean shouldPrune(Expression predicate, Map<Symbol, ColumnHandle> assignments, Map<ColumnHandle, ?> bindings)
+        private boolean shouldPrune(Expression predicate, Map<Symbol, ColumnHandle> assignments, Map<ColumnHandle, NullableValue> bindings)
         {
             List<Expression> conjuncts = extractConjuncts(predicate);
             IdentityHashMap<Expression, Type> expressionTypes = getExpressionTypes(session, metadata, parser, symbolAllocator.getTypes(), predicate);
@@ -781,6 +779,14 @@ public class AddExchanges
         }
 
         @Override
+        public PlanWithProperties visitUnnest(UnnestNode node, Context context)
+        {
+            PreferredProperties translatedPreferred = context.getPreferredProperties().translate(symbol -> node.getReplicateSymbols().contains(symbol) ? Optional.of(symbol) : Optional.empty());
+
+            return rebaseAndDeriveProperties(node, planChild(node, context.withPreferredProperties(translatedPreferred)));
+        }
+
+        @Override
         public PlanWithProperties visitSemiJoin(SemiJoinNode node, Context context)
         {
             PlanWithProperties source;
@@ -853,18 +859,10 @@ public class AddExchanges
             PlanWithProperties indexSource = node.getIndexSource().accept(this, context.withPreferredProperties(PreferredProperties.any()));
 
             // TODO: allow repartitioning if unpartitioned to increase parallelism
-            if (distributedIndexJoins && probeProperties.isDistributed()) {
-                // Force partitioned exchange if we are not effectively partitioned on the join keys, or if the probe is currently executing as a single stream
-                // and the repartitioning will make a difference.
-                boolean parentPartitioningPreferences = context.getPreferredProperties().getGlobalProperties()
-                        .flatMap(PreferredProperties.Global::getPartitioningProperties)
-                        .isPresent();
-                boolean enableSinglePartitionRedistribute = !parentPartitioningPreferences || !preferStreamingOperators;
-                if (!probeProperties.isPartitionedOn(joinColumns) || (enableSinglePartitionRedistribute && probeProperties.isEffectivelySinglePartition() && probeProperties.isRepartitionEffective(joinColumns))) {
-                    probeSource = withDerivedProperties(
-                            partitionedExchange(idAllocator.getNextId(), probeSource.getNode(), Optional.of(joinColumns), node.getProbeHashSymbol()),
-                            probeProperties);
-                }
+            if (shouldRepartitionForIndexJoin(joinColumns, context.getPreferredProperties(), probeProperties)) {
+                probeSource = withDerivedProperties(
+                        partitionedExchange(idAllocator.getNextId(), probeSource.getNode(), Optional.of(joinColumns), node.getProbeHashSymbol()),
+                        probeProperties);
             }
 
             // TODO: if input is grouped, create streaming join
@@ -872,6 +870,39 @@ public class AddExchanges
             // index side is really a nested-loops plan, so don't add exchanges
             PlanNode result = ChildReplacer.replaceChildren(node, ImmutableList.of(probeSource.getNode(), node.getIndexSource()));
             return new PlanWithProperties(result, deriveProperties(result, ImmutableList.of(probeSource.getProperties(), indexSource.getProperties())));
+        }
+
+        private boolean shouldRepartitionForIndexJoin(List<Symbol> joinColumns, PreferredProperties parentPreferredProperties, ActualProperties probeProperties)
+        {
+            // See if distributed index joins are enabled
+            if (!distributedIndexJoins) {
+                return false;
+            }
+
+            // No point in repartitioning if the plan is not distributed
+            if (!probeProperties.isDistributed()) {
+                return false;
+            }
+
+            Optional<PreferredProperties.Partitioning> parentPartitioningPreferences = parentPreferredProperties.getGlobalProperties()
+                    .flatMap(PreferredProperties.Global::getPartitioningProperties);
+
+            // Disable repartitioning if it would disrupt a parent's partitioning preference when streaming is enabled
+            boolean parentAlreadyPartitionedOnChild = parentPartitioningPreferences
+                    .map(partitioning -> probeProperties.isPartitionedOn(partitioning.getPartitioningColumns()))
+                    .orElse(false);
+            if (preferStreamingOperators && parentAlreadyPartitionedOnChild) {
+                return false;
+            }
+
+            // Otherwise, repartition if we need to align with the join columns
+            if (!probeProperties.isPartitionedOn(joinColumns)) {
+                return true;
+            }
+
+            // If we are already partitioned on the join columns because the data has been forced effectively into one stream,
+            // then we should repartition if that would make a difference (from the single stream state).
+            return probeProperties.isEffectivelySinglePartition() && probeProperties.isRepartitionEffective(joinColumns);
         }
 
         @Override

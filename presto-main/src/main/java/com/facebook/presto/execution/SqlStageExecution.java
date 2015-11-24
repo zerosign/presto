@@ -313,7 +313,7 @@ public final class SqlStageExecution
                 stateMachine.getFragment(),
                 initialSplits.build(),
                 outputBuffers.get(),
-                nodeTaskMap.getSplitCountChangeListener(node));
+                nodeTaskMap.createPartitionedSplitCountTracker(node, taskId));
 
         completeSources.forEach(task::noMoreSplits);
 
@@ -358,7 +358,7 @@ public final class SqlStageExecution
         }
         else {
             // stage finished while we were scheduling this task
-            task.cancel();
+            task.abort();
         }
 
         return task;

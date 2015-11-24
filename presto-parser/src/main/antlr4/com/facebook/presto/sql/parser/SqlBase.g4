@@ -37,7 +37,7 @@ statement
         '(' tableElement (',' tableElement)* ')'
         (WITH tableProperties)?                                        #createTable
     | DROP TABLE (IF EXISTS)? qualifiedName                            #dropTable
-    | INSERT INTO qualifiedName query                                  #insertInto
+    | INSERT INTO qualifiedName columnAliases? query                   #insertInto
     | DELETE FROM qualifiedName (WHERE booleanExpression)?             #delete
     | ALTER TABLE from=qualifiedName RENAME TO to=qualifiedName        #renameTable
     | ALTER TABLE tableName=qualifiedName
@@ -111,8 +111,25 @@ querySpecification
     : SELECT setQuantifier? selectItem (',' selectItem)*
       (FROM relation (',' relation)*)?
       (WHERE where=booleanExpression)?
-      (GROUP BY groupBy+=expression (',' groupBy+=expression)*)?
+      (GROUP BY groupingElement (',' groupingElement)*)?
       (HAVING having=booleanExpression)?
+    ;
+
+groupingElement
+    : groupingExpressions                                               #singleGroupingSet
+    | ROLLUP '(' (qualifiedName (',' qualifiedName)*)? ')'              #rollup
+    | CUBE '(' (qualifiedName (',' qualifiedName)*)? ')'                #cube
+    | GROUPING SETS '(' groupingSet (',' groupingSet)* ')'              #multipleGroupingSets
+    ;
+
+groupingExpressions
+    : '(' (expression (',' expression)*)? ')'
+    | expression
+    ;
+
+groupingSet
+    : '(' (qualifiedName (',' qualifiedName)*)? ')'
+    | qualifiedName
     ;
 
 namedQuery
@@ -225,10 +242,13 @@ primaryExpression
     | number                                                                         #numericLiteral
     | booleanValue                                                                   #booleanLiteral
     | STRING                                                                         #stringLiteral
+    | POSITION '(' valueExpression IN valueExpression ')'                            #position
     | '(' expression (',' expression)+ ')'                                           #rowConstructor
     | ROW '(' expression (',' expression)* ')'                                       #rowConstructor
     | qualifiedName '(' ASTERISK ')' over?                                           #functionCall
     | qualifiedName '(' (setQuantifier? expression (',' expression)*)? ')' over?     #functionCall
+    | identifier '->' expression                                                     #lambda
+    | '(' identifier (',' identifier)* ')' '->' expression                           #lambda
     | '(' query ')'                                                                  #subqueryExpression
     | CASE valueExpression whenClause+ (ELSE elseExpression=expression)? END         #simpleCase
     | CASE whenClause+ (ELSE elseExpression=expression)? END                         #searchedCase
@@ -246,7 +266,6 @@ primaryExpression
     | SUBSTRING '(' valueExpression FROM valueExpression (FOR valueExpression)? ')'  #substring
     | NORMALIZE '(' valueExpression (',' normalForm)? ')'                            #normalize
     | EXTRACT '(' identifier FROM valueExpression ')'                                #extract
-    | POSITION '(' valueExpression IN valueExpression ')'                            #position
     | '(' expression ')'                                                             #parenthesizedExpression
     ;
 
@@ -369,6 +388,10 @@ DISTINCT: 'DISTINCT';
 WHERE: 'WHERE';
 GROUP: 'GROUP';
 BY: 'BY';
+GROUPING: 'GROUPING';
+SETS: 'SETS';
+CUBE: 'CUBE';
+ROLLUP: 'ROLLUP';
 ORDER: 'ORDER';
 HAVING: 'HAVING';
 LIMIT: 'LIMIT';
