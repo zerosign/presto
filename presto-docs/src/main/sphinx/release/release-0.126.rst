@@ -23,8 +23,17 @@ General Changes
   within a task. This allows us to optimize for index cache hits or for more
   CPU parallelism. This option is toggled by the ``task.share-index-loading``
   config property or the ``task_share_index_loading`` session property.
+* Add :doc:`Tableau web connector </installation/tableau>`.
 * Improve performance of queries that use an ``IN`` expression with a large
   list of constant values.
+* Enable connector predicate push down for all comparable and equatable types.
+* Fix query planning failure when using certain operations such as ``GROUP BY``,
+  ``DISTINCT``, etc. on the output columns of ``UNNEST``.
+* In ``ExchangeClient`` set ``maxResponseSize`` to be slightly smaller than
+  the configured value. This reduces the possibility of encountering
+  ``PageTooLargeException``.
+* Fix memory leak in coordinator.
+* Add validation for names of table properties.
 
 Hive Changes
 ------------
@@ -34,3 +43,9 @@ Hive Changes
   would write the wrong date (off by one day).
 * Fix an issue where ``VARCHAR`` columns added to an existing table could not be
   queried.
+* Fix over-creation of initial splits.
+* Fix ``hive.immutable-partitions`` config property to also apply to
+  unpartitioned tables.
+* Allow non-``VARCHAR`` columns in ``DELETE`` query.
+* Support ``DATE`` columns as partition columns in parquet tables.
+* Improve error message for cases where partition columns are also table columns.
