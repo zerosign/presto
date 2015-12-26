@@ -18,16 +18,16 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import org.testng.annotations.Test;
 
-import static com.facebook.presto.plugin.jdbc.MetadataUtil.OUTPUT_TABLE_CODEC;
+import static com.facebook.presto.plugin.jdbc.MetadataUtil.INSERT_TABLE_CODEC;
 import static com.facebook.presto.plugin.jdbc.MetadataUtil.assertJsonRoundTrip;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 
-public class TestJdbcOutputTableHandle
+public class TestJdbcInsertTableHandle
 {
     @Test
     public void testJsonRoundTrip()
     {
-        JdbcOutputTableHandle handle = new JdbcOutputTableHandle(
+        JdbcInsertTableHandle handle = new JdbcInsertTableHandle(
                 "connectorId",
                 "catalog",
                 "schema",
@@ -38,6 +38,6 @@ public class TestJdbcOutputTableHandle
                 "jdbc:junk",
                 ImmutableMap.of("user", "test"));
 
-        assertJsonRoundTrip(OUTPUT_TABLE_CODEC, handle);
+        assertJsonRoundTrip(INSERT_TABLE_CODEC, handle);
     }
 }
