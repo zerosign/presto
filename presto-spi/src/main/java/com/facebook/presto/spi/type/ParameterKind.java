@@ -11,11 +11,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.facebook.presto.metadata;
 
-public interface JsonTypeIdResolver<T>
+package com.facebook.presto.spi.type;
+
+public enum ParameterKind
 {
-    String getId(T value);
-
-    Class<? extends T> getType(String id);
+    TYPE_SIGNATURE,
+    NAMED_TYPE_SIGNATURE,
+    LONG_LITERAL
 }

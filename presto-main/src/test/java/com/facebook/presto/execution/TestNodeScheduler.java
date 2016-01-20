@@ -16,6 +16,7 @@ package com.facebook.presto.execution;
 import com.facebook.presto.client.NodeVersion;
 import com.facebook.presto.execution.scheduler.LegacyNetworkTopology;
 import com.facebook.presto.execution.scheduler.NetworkLocation;
+import com.facebook.presto.execution.scheduler.NetworkLocationCache;
 import com.facebook.presto.execution.scheduler.NetworkTopology;
 import com.facebook.presto.execution.scheduler.NodeScheduler;
 import com.facebook.presto.execution.scheduler.NodeSchedulerConfig;
@@ -28,7 +29,6 @@ import com.facebook.presto.spi.HostAddress;
 import com.facebook.presto.spi.Node;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.testing.TestingTransactionHandle;
-import com.facebook.presto.transaction.TransactionHandle;
 import com.facebook.presto.util.FinalizerService;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
@@ -48,6 +48,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -123,7 +124,7 @@ public class TestNodeScheduler
     public void testTopologyAwareScheduling()
             throws UnknownHostException
     {
-        TransactionHandle transactionHandle = TestingTransactionHandle.create("foo");
+        TestingTransactionHandle transactionHandle = TestingTransactionHandle.create("foo");
         NodeTaskMap nodeTaskMap = new NodeTaskMap(finalizerService);
         InMemoryNodeManager nodeManager = new InMemoryNodeManager();
 
@@ -143,7 +144,15 @@ public class TestNodeScheduler
                 .setMaxPendingSplitsPerNodePerTask(15);
 
         TestNetworkTopology topology = new TestNetworkTopology();
-        NodeScheduler nodeScheduler = new NodeScheduler(topology, nodeManager, nodeSchedulerConfig, nodeTaskMap);
+        NetworkLocationCache locationCache = new NetworkLocationCache(topology)
+        {
+            @Override
+            public Optional<NetworkLocation> get(HostAddress host)
+            {
+                return Optional.of(topology.locate(host));
+            }
+        };
+        NodeScheduler nodeScheduler = new NodeScheduler(locationCache, topology, nodeManager, nodeSchedulerConfig, nodeTaskMap);
         NodeSelector nodeSelector = nodeScheduler.createNodeSelector("foo");
 
         // Fill up the nodes with non-local data
@@ -275,7 +284,7 @@ public class TestNodeScheduler
     public void testMaxSplitsPerNode()
             throws Exception
     {
-        TransactionHandle transactionHandle = TestingTransactionHandle.create("foo");
+        TestingTransactionHandle transactionHandle = TestingTransactionHandle.create("foo");
 
         Node newNode = new PrestoNode("other4", URI.create("http://127.0.0.1:14"), NodeVersion.UNKNOWN);
         nodeManager.addNode("foo", newNode);
@@ -314,7 +323,7 @@ public class TestNodeScheduler
     public void testMaxSplitsPerNodePerTask()
             throws Exception
     {
-        TransactionHandle transactionHandle = TestingTransactionHandle.create("foo");
+        TestingTransactionHandle transactionHandle = TestingTransactionHandle.create("foo");
 
         Node newNode = new PrestoNode("other4", URI.create("http://127.0.0.1:14"), NodeVersion.UNKNOWN);
         nodeManager.addNode("foo", newNode);
