@@ -41,22 +41,21 @@ import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
 import java.net.URI;
-import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.TimeUnit;
 
+import static com.facebook.presto.execution.scheduler.NetworkLocation.ROOT_LOCATION;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static java.util.Objects.requireNonNull;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
@@ -120,9 +119,9 @@ public class TestNodeScheduler
         assertEquals(assignment.getValue(), split);
     }
 
-    @Test
+    @Test(timeOut = 60 * 1000)
     public void testTopologyAwareScheduling()
-            throws UnknownHostException
+            throws Exception
     {
         TestingTransactionHandle transactionHandle = TestingTransactionHandle.create("foo");
         NodeTaskMap nodeTaskMap = new NodeTaskMap(finalizerService);
@@ -147,9 +146,15 @@ public class TestNodeScheduler
         NetworkLocationCache locationCache = new NetworkLocationCache(topology)
         {
             @Override
-            public Optional<NetworkLocation> get(HostAddress host)
+            public NetworkLocation get(HostAddress host)
             {
-                return Optional.of(topology.locate(host));
+                // Bypass the cache for workers, since we only look them up once and they would all be unresolved otherwise
+                if (host.getHostText().startsWith("host")) {
+                    return topology.locate(host);
+                }
+                else {
+                    return super.get(host);
+                }
             }
         };
         NodeScheduler nodeScheduler = new NodeScheduler(locationCache, topology, nodeManager, nodeSchedulerConfig, nodeTaskMap);
@@ -185,11 +190,13 @@ public class TestNodeScheduler
 
         // Assign rack-local splits
         ImmutableSet.Builder<Split> rackLocalSplits = ImmutableSet.builder();
+        HostAddress dataHost1 = HostAddress.fromParts("data.rack1", 1);
+        HostAddress dataHost2 = HostAddress.fromParts("data.rack2", 1);
         for (int i = 0; i < 6 * 2; i++) {
-            rackLocalSplits.add(new Split("foo", transactionHandle, new TestSplitRemote(HostAddress.fromParts("data.rack1", 1))));
+            rackLocalSplits.add(new Split("foo", transactionHandle, new TestSplitRemote(dataHost1)));
         }
         for (int i = 0; i < 6; i++) {
-            rackLocalSplits.add(new Split("foo", transactionHandle, new TestSplitRemote(HostAddress.fromParts("data.rack2", 1))));
+            rackLocalSplits.add(new Split("foo", transactionHandle, new TestSplitRemote(dataHost2)));
         }
         assignments = nodeSelector.computeAssignments(rackLocalSplits.build(), ImmutableList.copyOf(taskMap.values()));
         for (Node node : assignments.keySet()) {
@@ -197,6 +204,25 @@ public class TestNodeScheduler
             remoteTask.addSplits(new PlanNodeId("sourceId"), assignments.get(node));
         }
         Set<Split> unassigned = Sets.difference(rackLocalSplits.build(), new HashSet<>(assignments.values()));
+        // Compute the assignments a second time to account for the fact that some splits may not have been assigned due to asynchronous
+        // loading of the NetworkLocationCache
+        boolean cacheRefreshed = false;
+        while (!cacheRefreshed) {
+            cacheRefreshed = true;
+            if (locationCache.get(dataHost1).equals(ROOT_LOCATION)) {
+                cacheRefreshed = false;
+            }
+            if (locationCache.get(dataHost2).equals(ROOT_LOCATION)) {
+                cacheRefreshed = false;
+            }
+            MILLISECONDS.sleep(10);
+        }
+        assignments = nodeSelector.computeAssignments(unassigned, ImmutableList.copyOf(taskMap.values()));
+        for (Node node : assignments.keySet()) {
+            RemoteTask remoteTask = taskMap.get(node);
+            remoteTask.addSplits(new PlanNodeId("sourceId"), assignments.get(node));
+        }
+        unassigned = Sets.difference(unassigned, new HashSet<>(assignments.values()));
         assertEquals(unassigned.size(), 3);
         int rack1 = 0;
         int rack2 = 0;
@@ -382,7 +408,7 @@ public class TestNodeScheduler
         nodeTaskMap.addTask(chosenNode, remoteTask);
         assertEquals(nodeTaskMap.getPartitionedSplitsOnNode(chosenNode), 1);
         remoteTask.abort();
-        TimeUnit.MILLISECONDS.sleep(100); // Sleep until cache expires
+        MILLISECONDS.sleep(100); // Sleep until cache expires
         assertEquals(nodeTaskMap.getPartitionedSplitsOnNode(chosenNode), 0);
 
         remoteTask.abort();

@@ -11,20 +11,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.facebook.presto.spi;
+package com.facebook.presto.tpch;
 
-import com.facebook.presto.spi.predicate.TupleDomain;
+import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
 
-@Deprecated
-public interface ConnectorPartition
+public enum TpchTransactionHandle
+        implements ConnectorTransactionHandle
 {
-    /**
-     * Get the unique id of this partition within the scope of the table.
-     */
-    String getPartitionId();
-
-    /**
-     * Gets the TupleDomain that provides a bound on the tuples within this Partition.
-     */
-    TupleDomain<ColumnHandle> getTupleDomain();
+    INSTANCE
 }

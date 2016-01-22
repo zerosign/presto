@@ -96,6 +96,7 @@ import static com.facebook.presto.hive.HiveTableProperties.getPartitionedBy;
 import static com.facebook.presto.hive.HiveTableProperties.getRetentionDays;
 import static com.facebook.presto.hive.HiveType.toHiveType;
 import static com.facebook.presto.hive.HiveUtil.PRESTO_VIEW_FLAG;
+import static com.facebook.presto.hive.HiveUtil.annotateColumnComment;
 import static com.facebook.presto.hive.HiveUtil.decodeViewData;
 import static com.facebook.presto.hive.HiveUtil.encodeViewData;
 import static com.facebook.presto.hive.HiveUtil.hiveColumnHandles;
@@ -1359,11 +1360,11 @@ public class HiveMetadata
         }
         Map<String, String> columnComment = builder.build();
 
-        return input -> new ColumnMetadata(
-                input.getName(),
-                typeManager.getType(input.getTypeSignature()),
-                input.isPartitionKey(),
-                columnComment.get(input.getName()),
+        return handle -> new ColumnMetadata(
+                handle.getName(),
+                typeManager.getType(handle.getTypeSignature()),
+                handle.isPartitionKey(),
+                annotateColumnComment(columnComment.get(handle.getName()), handle.isPartitionKey()),
                 false);
     }
 }
