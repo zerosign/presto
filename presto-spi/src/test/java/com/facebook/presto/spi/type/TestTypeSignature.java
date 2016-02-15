@@ -15,12 +15,15 @@ package com.facebook.presto.spi.type;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import org.testng.annotations.Test;
 
 import java.util.List;
 import java.util.Map;
 
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
+import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
+import static com.facebook.presto.spi.type.VarcharType.createVarcharType;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.fail;
 
@@ -59,6 +62,15 @@ public class TestTypeSignature
     private void assertBindSignature(String typeName, Map<String, Type> boundParameters, String expectedTypeName)
     {
         assertEquals(parseTypeSignature(typeName).bindParameters(boundParameters).toString(), expectedTypeName);
+    }
+
+    @Test
+    public void parseSignatureWithLiterals() throws Exception
+    {
+        TypeSignature result = parseTypeSignature("decimal(X,42)", ImmutableSet.of("X"));
+        assertEquals(result.getParameters().size(), 2);
+        assertEquals(result.getParameters().get(0).isLiteralCalculation(), true);
+        assertEquals(result.getParameters().get(1).isLongLiteral(), true);
     }
 
     @Test
@@ -132,6 +144,14 @@ public class TestTypeSignature
     {
         assertSignature("foo(42)", "foo", ImmutableList.<String>of("42"));
         assertSignature("varchar(10)", "varchar", ImmutableList.<String>of("10"));
+    }
+
+    @Test
+    public void testVarchar()
+            throws Exception
+    {
+        assertEquals(VARCHAR.getTypeSignature().toString(), "varchar");
+        assertEquals(createVarcharType(42).getTypeSignature().toString(), "varchar(42)");
     }
 
     private static void assertRowSignature(
