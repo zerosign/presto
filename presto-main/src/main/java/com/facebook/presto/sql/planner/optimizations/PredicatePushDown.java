@@ -46,6 +46,7 @@ import com.facebook.presto.sql.tree.BooleanLiteral;
 import com.facebook.presto.sql.tree.ComparisonExpression;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.ExpressionTreeRewriter;
+import com.facebook.presto.sql.tree.LogicalBinaryExpression;
 import com.facebook.presto.sql.tree.NullLiteral;
 import com.facebook.presto.sql.tree.QualifiedNameReference;
 import com.google.common.base.Preconditions;
@@ -318,7 +319,7 @@ public class PredicatePushDown
                 Iterable<Expression> simplifiedJoinConjuncts = null;
 
                 // Rewrite criteria and add projections if there is a new join predicate
-                if (!newJoinPredicate.equals(joinPredicate)) {
+                if (!containsPredicate(newJoinPredicate, joinPredicate)) {
                     // Create identity projections for all existing symbols
                     ImmutableMap.Builder<Symbol, Expression> leftProjections = ImmutableMap.builder();
 
@@ -369,6 +370,44 @@ public class PredicatePushDown
                 output = new FilterNode(idAllocator.getNextId(), output, postJoinPredicate);
             }
             return output;
+        }
+
+        private boolean containsPredicate(Expression newJoinPredicate, Expression joinPredicate)
+        {
+            if (newJoinPredicate instanceof LogicalBinaryExpression) {
+                LogicalBinaryExpression expression = (LogicalBinaryExpression) newJoinPredicate;
+                if (expression.getType() == LogicalBinaryExpression.Type.AND) {
+                    return containsPredicate(expression.getLeft(), joinPredicate) || containsPredicate(expression.getRight(), joinPredicate);
+                }
+            }
+            if (newJoinPredicate.equals(joinPredicate)) {
+                return true;
+            }
+            if (newJoinPredicate instanceof ComparisonExpression && joinPredicate instanceof ComparisonExpression) {
+                ComparisonExpression expression = (ComparisonExpression) newJoinPredicate;
+
+                // switch left and right
+                ComparisonExpression.Type type = expression.getType();
+                switch (expression.getType()) {
+                    case GREATER_THAN:
+                        type = ComparisonExpression.Type.LESS_THAN_OR_EQUAL;
+                        break;
+                    case GREATER_THAN_OR_EQUAL:
+                        type = ComparisonExpression.Type.LESS_THAN;
+                        break;
+                    case LESS_THAN:
+                        type = ComparisonExpression.Type.GREATER_THAN_OR_EQUAL;
+                        break;
+                    case LESS_THAN_OR_EQUAL:
+                        type = ComparisonExpression.Type.GREATER_THAN;
+                        break;
+                    default:
+                        break;
+                }
+                expression = new ComparisonExpression(type, expression.getRight(), expression.getLeft());
+                return expression.equals(joinPredicate);
+            }
+            return false;
         }
 
         private OuterJoinPushDownResult processLimitedOuterJoin(Expression inheritedPredicate, Expression outerEffectivePredicate, Expression innerEffectivePredicate, Expression joinPredicate, Collection<Symbol> outerSymbols)
