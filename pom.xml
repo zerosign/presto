@@ -39,7 +39,7 @@
         <air.check.skip-extended>true</air.check.skip-extended>
         <air.check.skip-license>false</air.check.skip-license>
 
-        <air.check.fail-checkstyle>true</air.check.fail-checkstyle>
+        <air.check.fail-checkstyle>false</air.check.fail-checkstyle>
         <air.check.skip-checkstyle>false</air.check.skip-checkstyle>
 
         <air.java.version>1.8.0-40</air.java.version>
@@ -97,16 +97,16 @@
         <module>presto-main</module>
         <module>presto-ml</module>
         <module>presto-benchmark</module>
-        <module>presto-tests</module>
-        <module>presto-product-tests</module>
+        <!-- <module>presto-tests</module> -->
+        <!-- <module>presto-product-tests</module> -->
         <module>presto-jdbc</module>
         <module>presto-cli</module>
-        <module>presto-benchmark-driver</module>
+        <!-- <module>presto-benchmark-driver</module> -->
         <module>presto-server</module>
         <module>presto-server-rpm</module>
         <module>presto-docs</module>
         <module>presto-verifier</module>
-        <module>presto-testing-server-launcher</module>
+        <!-- <module>presto-testing-server-launcher</module> -->
     </modules>
 
     <dependencyManagement>
