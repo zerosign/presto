@@ -50,11 +50,15 @@ public interface JdbcClient
 
     void commitCreateTable(JdbcOutputTableHandle handle, Collection<Slice> fragments);
 
+    JdbcInsertTableHandle beginInsertTable(ConnectorTableMetadata tableMetadata);
+
+    void commitInsertTable(JdbcInsertTableHandle handle, Collection<Slice> fragments);
+
     void dropTable(JdbcTableHandle jdbcTableHandle);
 
-    String buildInsertSql(JdbcOutputTableHandle handle);
+    String buildInsertSql(JdbcWritableTableHandle handle);
 
-    Connection getConnection(JdbcOutputTableHandle handle)
+    Connection getConnection(JdbcWritableTableHandle handle)
             throws SQLException;
 
     PreparedStatement getPreparedStatement(Connection connection, String sql)

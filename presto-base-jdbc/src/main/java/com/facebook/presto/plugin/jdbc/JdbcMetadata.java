@@ -15,6 +15,7 @@ package com.facebook.presto.plugin.jdbc;
 
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
+import com.facebook.presto.spi.ConnectorInsertTableHandle;
 import com.facebook.presto.spi.ConnectorMetadata;
 import com.facebook.presto.spi.ConnectorOutputTableHandle;
 import com.facebook.presto.spi.ConnectorSession;
@@ -162,5 +163,19 @@ public class JdbcMetadata
     {
         JdbcOutputTableHandle handle = checkType(tableHandle, JdbcOutputTableHandle.class, "tableHandle");
         jdbcClient.commitCreateTable(handle, fragments);
+    }
+
+    @Override
+    public ConnectorInsertTableHandle beginInsert(ConnectorSession session, ConnectorTableHandle tableHandle)
+    {
+        checkType(tableHandle, JdbcTableHandle.class, "tableHandle");
+        return jdbcClient.beginInsertTable(getTableMetadata(session, tableHandle));
+    }
+
+    @Override
+    public void commitInsert(ConnectorSession session, ConnectorInsertTableHandle tableHandle, Collection<Slice> fragments)
+    {
+        JdbcInsertTableHandle jdbcInsertHandle = checkType(tableHandle, JdbcInsertTableHandle.class, "tableHandle");
+        jdbcClient.commitInsertTable(jdbcInsertHandle, fragments);
     }
 }

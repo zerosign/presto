@@ -15,6 +15,7 @@ package com.facebook.presto.plugin.jdbc;
 
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorHandleResolver;
+import com.facebook.presto.spi.ConnectorInsertTableHandle;
 import com.facebook.presto.spi.ConnectorOutputTableHandle;
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.ConnectorTableHandle;
@@ -23,6 +24,51 @@ import com.facebook.presto.spi.ConnectorTableLayoutHandle;
 public class JdbcHandleResolver
         implements ConnectorHandleResolver
 {
+
+    private final String connectorId;
+
+    @Inject
+    public JdbcHandleResolver(JdbcConnectorId clientId)
+    {
+        this.connectorId = requireNonNull(clientId, "clientId is null").toString();
+    }
+
+    @Override
+    public boolean canHandle(ConnectorTableHandle tableHandle)
+    {
+        return tableHandle instanceof JdbcTableHandle && ((JdbcTableHandle) tableHandle).getConnectorId().equals(connectorId);
+    }
+
+    @Override
+    public boolean canHandle(ColumnHandle columnHandle)
+    {
+        return columnHandle instanceof JdbcColumnHandle && ((JdbcColumnHandle) columnHandle).getConnectorId().equals(connectorId);
+    }
+
+    @Override
+    public boolean canHandle(ConnectorSplit split)
+    {
+        return split instanceof JdbcSplit && ((JdbcSplit) split).getConnectorId().equals(connectorId);
+    }
+
+    @Override
+    public boolean canHandle(ConnectorOutputTableHandle tableHandle)
+    {
+        return (tableHandle instanceof JdbcOutputTableHandle) && ((JdbcOutputTableHandle) tableHandle).getConnectorId().equals(connectorId);
+    }
+
+    @Override
+    public boolean canHandle(ConnectorInsertTableHandle tableHandle)
+    {
+        return (tableHandle instanceof JdbcInsertTableHandle) && ((JdbcInsertTableHandle) tableHandle).getConnectorId().equals(connectorId);
+    }
+
+    @Override
+    public boolean canHandle(ConnectorTableLayoutHandle handle)
+    {
+        return (handle instanceof JdbcTableLayoutHandle) && ((JdbcTableLayoutHandle) handle).getTable().getConnectorId().equals(connectorId);
+    }
+
     @Override
     public Class<? extends ConnectorTableHandle> getTableHandleClass()
     {
@@ -51,5 +97,11 @@ public class JdbcHandleResolver
     public Class<? extends ConnectorOutputTableHandle> getOutputTableHandleClass()
     {
         return JdbcOutputTableHandle.class;
+    }
+
+    @Override
+    public Class<? extends ConnectorInsertTableHandle> getInsertTableHandleClass()
+    {
+        return JdbcInsertTableHandle.class;
     }
 }
