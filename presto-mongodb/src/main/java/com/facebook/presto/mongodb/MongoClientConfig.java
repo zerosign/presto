@@ -54,6 +54,7 @@ public class MongoClientConfig
     private WriteConcernType writeConcern = WriteConcernType.ACKNOWLEDGED;
     private String requiredReplicaSetName;
     private String implicitRowFieldPrefix = "_pos";
+    private boolean slaveOk = false;
 
     @NotNull
     public String getSchemaCollection()
@@ -67,7 +68,17 @@ public class MongoClientConfig
         this.schemaCollection = schemaCollection;
         return this;
     }
+    
+    public boolean getSlaveOk() {
+        return this.slaveOk;
+    }
 
+    @Config("mongodb.set-slave-ok")
+    public MongoClientConfig setSlaveOk(boolean flag) {
+        this.slaveOk = flag;
+        return this;
+    }
+    
     @NotNull
     @Size(min = 1)
     public List<ServerAddress> getSeeds()

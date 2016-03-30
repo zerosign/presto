@@ -20,6 +20,7 @@ import com.google.inject.Provides;
 import com.google.inject.Scopes;
 import com.mongodb.MongoClient;
 import com.mongodb.MongoClientOptions;
+import com.mongodb.MongoOptions;
 
 import javax.inject.Singleton;
 
@@ -60,7 +61,7 @@ public class MongoClientModule
                 .minConnectionsPerHost(config.getMinConnectionsPerHost())
                 .readPreference(config.getReadPreference().getReadPreference())
                 .writeConcern(config.getWriteConcern().getWriteConcern());
-
+        
         if (config.getRequiredReplicaSetName() != null) {
             options.requiredReplicaSetName(config.getRequiredReplicaSetName());
         }
