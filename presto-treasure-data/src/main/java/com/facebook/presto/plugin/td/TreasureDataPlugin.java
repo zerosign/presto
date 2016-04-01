@@ -14,7 +14,6 @@
 package com.facebook.presto.plugin.td;
 
 import com.facebook.presto.plugin.jdbc.JdbcPlugin;
-import com.google.inject.Module;
 
 /**
  *
@@ -22,8 +21,8 @@ import com.google.inject.Module;
  */
 public class TreasureDataPlugin extends JdbcPlugin {
     
-    public TreasureDataPlugin(String name, Module module) {
-        super("td", module);
+    public TreasureDataPlugin() {
+        super("td", new TreasureDataClientModule());
     }
     
 }
