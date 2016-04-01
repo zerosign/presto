@@ -186,6 +186,8 @@ public class BaseJdbcClient
         }
     }
 
+    
+    
     @Override
     public List<JdbcColumnHandle> getColumns(JdbcTableHandle tableHandle)
     {
@@ -259,6 +261,8 @@ public class BaseJdbcClient
                 columnHandles,
                 split.getTupleDomain());
     }
+    
+    
 
     @Override
     public JdbcOutputTableHandle beginCreateTable(ConnectorTableMetadata tableMetadata)
@@ -278,7 +282,7 @@ public class BaseJdbcClient
     @Override
     public void commitCreateTable(JdbcOutputTableHandle handle, Collection<Slice> fragments)
     {
-        StringBuilder sql = new StringBuilder()
+        final StringBuilder sql = new StringBuilder()
                 .append("ALTER TABLE ")
                 .append(quoted(handle.getCatalogName(), handle.getSchemaName(), handle.getTemporaryTableName()))
                 .append(" RENAME TO ")

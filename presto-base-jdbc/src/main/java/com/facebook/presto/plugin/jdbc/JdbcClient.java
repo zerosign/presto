@@ -47,7 +47,8 @@ public interface JdbcClient
             throws SQLException;
 
     JdbcOutputTableHandle beginCreateTable(ConnectorTableMetadata tableMetadata);
-
+    
+    
     void commitCreateTable(JdbcOutputTableHandle handle, Collection<Slice> fragments);
 
     JdbcInsertTableHandle beginInsertTable(ConnectorTableMetadata tableMetadata);

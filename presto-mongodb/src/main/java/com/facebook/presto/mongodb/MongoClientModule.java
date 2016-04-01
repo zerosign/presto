@@ -20,7 +20,7 @@ import com.google.inject.Provides;
 import com.google.inject.Scopes;
 import com.mongodb.MongoClient;
 import com.mongodb.MongoClientOptions;
-import com.mongodb.MongoOptions;
+import com.mongodb.ReadPreference;
 
 import javax.inject.Singleton;
 
@@ -59,14 +59,21 @@ public class MongoClientModule
                 .socketKeepAlive(config.getSocketKeepAlive())
                 .maxWaitTime(config.getMaxWaitTime())
                 .minConnectionsPerHost(config.getMinConnectionsPerHost())
-                .readPreference(config.getReadPreference().getReadPreference())
-                .writeConcern(config.getWriteConcern().getWriteConcern());
+                .readPreference(ReadPreference.secondaryPreferred());
+                //.readPreference(config.getReadPreference().getReadPreference())
+                //.writeConcern(config.getWriteConcern().getWriteConcern());
         
         if (config.getRequiredReplicaSetName() != null) {
             options.requiredReplicaSetName(config.getRequiredReplicaSetName());
         }
-
-        MongoClient client = new MongoClient(config.getSeeds(), config.getCredentials(), options.build());
+        
+        MongoClient client;
+        
+        if(config.getCredentials().isEmpty()) {
+            client = new MongoClient(config.getSeeds(), options.build());
+        } else {
+            client = new MongoClient(config.getSeeds(), config.getCredentials(), options.build());
+        }
 
         return new MongoSession(
                 typeManager,

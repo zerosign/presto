@@ -42,6 +42,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static com.facebook.presto.plugin.jdbc.Types.checkType;
+import com.facebook.presto.spi.ConnectorViewDefinition;
 import static com.facebook.presto.spi.StandardErrorCode.PERMISSION_DENIED;
 import static java.util.Objects.requireNonNull;
 
@@ -151,6 +152,8 @@ public class JdbcMetadata
         JdbcTableHandle handle = checkType(tableHandle, JdbcTableHandle.class, "tableHandle");
         jdbcClient.dropTable(handle);
     }
+
+    
 
     @Override
     public ConnectorOutputTableHandle beginCreateTable(ConnectorSession session, ConnectorTableMetadata tableMetadata)

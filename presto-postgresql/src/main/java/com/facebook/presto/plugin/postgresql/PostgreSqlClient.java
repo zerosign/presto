@@ -42,7 +42,7 @@ public class PostgreSqlClient
     public void commitCreateTable(JdbcOutputTableHandle handle, Collection<Slice> fragments)
     {
         // PostgreSQL does not allow qualifying the target of a rename
-        StringBuilder sql = new StringBuilder()
+        final StringBuilder sql = new StringBuilder()
                 .append("ALTER TABLE ")
                 .append(quoted(handle.getCatalogName(), handle.getSchemaName(), handle.getTemporaryTableName()))
                 .append(" RENAME TO ")
